@@ -19,14 +19,31 @@ You don't need to interpret the results. Fill in the "Result" lines and hand the
 select rolsuper, rolbypassrls from pg_roles where rolname = 'postgres';
 select relname, relacl from pg_class where oid in ('auth.sessions'::regclass, 'auth.users'::regclass);
 ```
-Result: ______
+Result: `postgres` is not a superuser and has bypass-RLS (checked via the Supabase connector). It holds SELECT with grant option (the `*` after `r`) on `auth.users` and `auth.sessions`, but no grant option for DELETE or anything else.
+
+[
+  {
+    "relname": "users",
+    "relacl": "{supabase_auth_admin=arwdDxtm/supabase_auth_admin,dashboard_user=arwdDxtm/supabase_auth_admin,postgres=ar*wdDxtm/supabase_auth_admin}"
+  },
+  {
+    "relname": "sessions",
+    "relacl": "{postgres=ar*wdDxtm/supabase_auth_admin,supabase_auth_admin=arwdDxtm/supabase_auth_admin,dashboard_user=arwdDxtm/supabase_auth_admin}"
+  }
+]
 
 ### Step B: can we grant direct table access? (expected to fail; that's fine)
 ```sql
 create role t_api nologin;
 grant select (id, user_id, not_after) on auth.sessions to t_api;
 ```
-Result (success, or the error text): ______
+Result (success, or the error text): 
+
+Must've had success, but I missed it and when I went to re-run it I see this error:
+
+Error: Failed to run sql query: ERROR: 42710: role "t_api" already exists
+
+Confirmed via the connector: the first run succeeded (t_api holds SELECT on `auth.sessions` id, user_id, not_after). It still can't read the table, because it has no USAGE on schema `auth`. Granting that would expose the whole schema, so the definer function stays the plan.
 
 ### Step C: the function itself (the important one)
 Run this as one block:
@@ -47,18 +64,23 @@ Then run each of these on its own:
 set role t_api; select app_auth.session_active(gen_random_uuid(), gen_random_uuid()); reset role;
 ```
 **Expected:** `false`, no error.
+
+Correct, got false
+
 ```sql
 set role t_api; select * from auth.sessions; reset role;
 ```
 **Expected:** a permission error. That's good: the role can ask the function, but can't read the table.
 
-Result: ______
+Result: Failed to run sql query: ERROR:  42501: permission denied for schema auth
+LINE 1: set role t_api; select * from auth.sessions; reset role;
+                                      ^
 
 ### Step D: a real login, then sign-out
 1. Go to **Authentication → Users → Add user → Create new user**. Use any email and password and tick **Auto confirm**.
 2. Sign that user in from a terminal. Take the URL and **anon key** from **Project Settings → API**, and put the throwaway email and password in place of the placeholders:
    ```bash
-   curl -s -X POST "https://<ref>.supabase.co/auth/v1/token?grant_type=password" -H "apikey: <anon key>" -H "Content-Type: application/json" -d '{"email":"<email>","password":"<password>"}'
+   curl -s -X POST "https://<project-ref>.supabase.co/auth/v1/token?grant_type=password" -H "apikey: <sb_publishable_ key>" -H "Content-Type: application/json" -d '{"email":"<email>","password":"<password>"}'
    ```
    Save the `refresh_token` from the response.
 3. Back in the SQL Editor, find the session and check it:
@@ -79,11 +101,11 @@ Result: ______
    **Expected:** `1`, then `false`.
 5. Confirm the old refresh token no longer works:
    ```bash
-   curl -s -X POST "https://<ref>.supabase.co/auth/v1/token?grant_type=refresh_token" -H "apikey: <anon key>" -H "Content-Type: application/json" -d '{"refresh_token":"<refresh_token>"}'
+   curl -s -X POST "https://<project-ref>.supabase.co/auth/v1/token?grant_type=refresh_token" -H "apikey: <sb_publishable_ key>" -H "Content-Type: application/json" -d '{"refresh_token":"<refresh_token>"}'
    ```
    **Expected:** an error.
 
-Result: ______
+Result: D2 sign-in worked (the access token is signed ES256, with `session_id` c1db46c9-…). Run through the connector: D3 `session_active` returned `true` as `postgres` and as `t_api`; D4 `revoke_sessions` returned `1`, then `session_active` returned `false` as `t_api`. D5 refresh with the old token: `400 refresh_token_not_found` (as expected). **Check 1 passed (Oct 7, 2026).**
 
 ### Step E (optional): ban and delete
 Use the **secret** (service role) key from **Project Settings → API**. Sign in again first (step D2) to get a fresh session.
@@ -98,7 +120,7 @@ curl -s -X DELETE "https://<ref>.supabase.co/auth/v1/admin/users/<user_id>" -H "
 ```
 Run `select count(*) from auth.sessions;` in the SQL Editor. **Expected:** `0`.
 
-Result: ______
+Result: ban returned `banned_until`; refresh then failed with `400 user_banned`; the session row **stayed** after the ban (a ban blocks renewal, it does not sign out); deleting the user returned `{}` and left 0 users and 0 sessions. **Passed (Oct 7, 2026).**
 
 ### Cleanup
 Delete the `scratch-auth-test` project: **Project Settings → General → Delete project**.
@@ -154,7 +176,7 @@ Change `index.html` to `version 2`, then commit and push to `main`.
 In GitHub, go to **Actions → publish → Run workflow** on `main`.
 **Expected:** the workflow passes, Netlify starts a production deploy, and within a minute or two the site shows "version 2".
 
-Result: ______
+Result: **Passed (Oct 7, 2026).** Run by a Sonnet agent on `murrayrodney/netlify-gate-test` and the site `netlify-gate-test`. Pushing to `main` created no deploy, and the site kept serving version 1. The workflow run created a production deploy (context `production`, committer `github-actions[bot]`), and the site served version 2 within about 15 s of the push.
 
 ### Test 3: with the branch rule on, the workflow still works and force pushes fail
 1. In GitHub, go to **Settings → Rules → Rulesets → New branch ruleset**:
@@ -170,7 +192,7 @@ Result: ______
    ```
    **Expected:** rejected by the ruleset.
 
-Result: ______
+Result: **Passed.** With the ruleset applied (deletion and non_fast_forward only, no bypass), the workflow published version 3. A manual force push and a branch delete were both rejected with `GH013: Repository rule violations`.
 
 ### Cleanup
 Delete the Netlify site (**Site configuration → Danger zone → Delete**) and the GitHub repo (**Settings → Danger zone → Delete**).

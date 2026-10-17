@@ -8,8 +8,8 @@ Source documents: `docs/Family Weather App Design Doc.md`, `docs/Design Review F
 
 Owns:
 
-- Binary `poller` (crate `backend/crates/poller`): one always-on process running scheduled jobs `awn_ingest`, `daily_rollup`, `reference_sync`, `forecast_snapshot`, plus on-demand jobs `awn_backfill` and `credential_reencrypt`.
-- Shared `backend/crates/core` modules (conventions "Shared Rust code"): `config`, `db`, `redact`, `clock`, `awn` (trait `AwnApi`, `LiveAwn`, `ReplayAwn`, error enum), `ratelimit`; and poller-only helpers `time`, `gdd`, `rain`, `forecast`, `openmeteo`, `acis`. 02-api consumes `config`, `db`, `redact`, `clock`, `awn`, `ratelimit`; it must not redefine them.
+- Binary `poller` (crate `backend/crates/poller`): one always-on process running scheduled jobs `awn_ingest`, `daily_rollup`, `reference_sync`, plus on-demand jobs `awn_backfill` and `credential_reencrypt`. The poller stores and fetches no forecasts (proposals/06, option A, Oct 7): the API serves live Open-Meteo forecasts and the forecast-change view itself (02 section 5.6). The poller goes live early only because AWN station history cannot be rebuilt.
+- Shared `backend/crates/core` modules (conventions "Shared Rust code"): `config`, `db`, `redact`, `clock`, `awn` (trait `AwnApi`, `LiveAwn`, `ReplayAwn`, error enum), `ratelimit`; and poller-only helpers `time`, `rain`, `acis`. (The `forecast` and `openmeteo` modules no longer exist here; the Open-Meteo client and the percentile code live in the `api` crate, 02.) 02-api consumes `config`, `db`, `redact`, `clock`, `awn`, `ratelimit` and the `acis` StnMeta search (`AcisApi::nearby_stations`, 7.5) for its baseline picker; it must not redefine them. The poller computes no GDD: growing degree days are computed at query time by the API from stored daily tmax/tmin (04 `app.gdd_day`).
 - Fixture files and the recorder under `backend/fixtures/` (conventions "Fixtures").
 
 Does not own: schema, grants, `core::crypto` and `core::testdb` (04), Fly apps/secrets/one-off commands/healthchecks.io account (06), Compose and seed wiring (05), connect-flow logic and endpoints (02).
@@ -25,8 +25,7 @@ Does not own: schema, grants, `core::crypto` and `core::testdb` (04), Fly apps/s
 | S8 | HPKE decrypt via 04's `decrypt_credential`; `credential_reencrypt` job (section 6). |
 | G6 | One `AWN_APPLICATION_KEY`; per-owner keys decrypted from `app.credentials`. |
 | G8 | Gate reservations `awn:app:poller` (500 ms) and `awn:key:<credential_id>` (1000 ms); 429 backoff; 401/403 decided at end of run (5.3). |
-| F1 | 6-hourly forecast aggregates, only on a new model run. |
-| F2 | Open question Q9. |
+| F1, F2 | Closed by proposals/06: no forecast snapshots; nothing forecast-related runs in the poller. |
 | F3 | Backfill idempotent and resumable (`stations.backfill_floor_ts`). |
 | F4 | Reference data from the airport GHCN-Daily station via ACIS. |
 | F5 | Rollup days are local standard time. |
@@ -50,15 +49,15 @@ Fixture recording is the cargo example `backend/crates/poller/examples/record_fi
 
 ### 3.2 Environment variables
 
-Used (all from conventions): `APP_ENV`, `DATABASE_URL` (`app_poller`), `AWN_APPLICATION_KEY`, `AWN_MODE`, `FIXTURES_DIR`, `CREDENTIALS_PRIVATE_KEY`, `CREDENTIALS_KEY_VERSION`, `CREDENTIALS_PRIVATE_KEY_PREVIOUS`, `CREDENTIALS_KEY_VERSION_PREVIOUS` (rotation only), `POLLER_ENABLED`, `HEALTHCHECK_URL_<JOB>` (suffixes used by the poller: `AWN_INGEST`, `DAILY_ROLLUP`, `REFERENCE_SYNC`, `FORECAST_SNAPSHOT`; ignored locally; `awn_backfill` and `credential_reencrypt` send no pings and any `HEALTHCHECK_URL_AWN_BACKFILL` is ignored), `RUST_LOG`.
+Used (all from conventions): `APP_ENV`, `DATABASE_URL` (`app_poller`), `AWN_APPLICATION_KEY`, `AWN_MODE`, `FIXTURES_DIR`, `CREDENTIALS_PRIVATE_KEY`, `CREDENTIALS_KEY_VERSION`, `CREDENTIALS_PRIVATE_KEY_PREVIOUS`, `CREDENTIALS_KEY_VERSION_PREVIOUS` (rotation only), `POLLER_ENABLED`, `HEALTHCHECK_URL_<JOB>` (suffixes used by the poller: `AWN_INGEST`, `DAILY_ROLLUP`, `REFERENCE_SYNC`; ignored locally; `awn_backfill` and `credential_reencrypt` send no pings and any `HEALTHCHECK_URL_AWN_BACKFILL` is ignored), `RUST_LOG`.
 
-Poller-local: only `GDD_METHOD` (`avg_50` default, or `clamp_50_86`; undecided in the design doc, Q1). Everything else is a named constant in code so there is nothing to mis-set: heartbeat path, shutdown grace (25 s), rain thresholds (`core::rain::consts`), coverage thresholds, `REFERENCE_START_YEAR = 1991`, precipitation probability threshold (0.01 in), GDD base (50 F, implied by the method names). In `AWN_MODE=replay` ACIS and Open-Meteo also replay from fixtures (no separate switch). Test-only overrides (gate spacing, clock) are constructor arguments under `cfg(any(test, feature = "test-support"))`, never env.
+Poller-local: none. Everything is a named constant in code so there is nothing to mis-set: heartbeat path, shutdown grace (25 s), rain thresholds (`core::rain::consts`), coverage thresholds, `REFERENCE_START_YEAR = 1991`, precipitation probability threshold (0.01 in). In `AWN_MODE=replay` ACIS also replays from fixtures (no separate switch). Test-only overrides (gate spacing, clock) are constructor arguments under `cfg(any(test, feature = "test-support"))`, never env.
 
 ### 3.3 Database objects (04 section 3.6; DDL not repeated)
 
 - `credentials`: read all; UPDATE `status, status_changed_at, last_ok_at, api_key_ciphertext, encapsulated_key, key_version`. Poller uses rows reached through `stations.credential_id` with status `ok` or `rate_limited`; skips `invalid` and `replaced`. Rotation touches **all** rows.
 - `stations`: reads `is_enabled`, `mac`, `credential_id`, `timezone`, `std_utc_offset_minutes`, `reference_station_id`; UPDATE only `last_observed_at`, `backfill_floor_ts`.
-- `forecast_locations`: SELECT. `observations`, `daily_rollups`, `reference_daily`: SELECT/INSERT/UPDATE. `reference_stations`: SELECT and UPDATE `last_synced_date` only. `forecast_runs`, `forecast_snapshots`: INSERT only, `ON CONFLICT DO NOTHING`. `job_runs`: SELECT/INSERT/UPDATE/DELETE. `audit_log`: INSERT. `rate_gates`: SELECT/INSERT/UPDATE; `rollup_dirty_days`: SELECT/INSERT/DELETE plus `UPDATE(local_date)` (needed by the `ON CONFLICT DO UPDATE` row-lock enqueue; conventions; 04 owns DDL).
+- `observations`, `daily_rollups`, `reference_daily`: SELECT/INSERT/UPDATE. `reference_stations`: SELECT and UPDATE `last_synced_date` only. There are no forecast tables. `job_runs`: SELECT/INSERT/UPDATE/DELETE. `audit_log`: INSERT. `rate_gates`: SELECT/INSERT/UPDATE; `rollup_dirty_days`: SELECT/INSERT/DELETE plus `UPDATE(local_date)` (needed by the `ON CONFLICT DO UPDATE` row-lock enqueue; conventions; 04 owns DDL).
 - Credential writes are always guarded and minimal. Status: `UPDATE app.credentials SET status=$1, status_changed_at=now() WHERE id=$2 AND status IN ('ok','rate_limited') AND status IS DISTINCT FROM $1` (so `status_changed_at` moves only on a real change). `last_ok_at` is a separate statement: `UPDATE app.credentials SET last_ok_at=now() WHERE id=$2 AND status IN ('ok','rate_limited')`. An audit row is written only if the status statement changed a row (`rows_affected() = 1`).
 - `job_runs.id` is uuid; status `running|success|failed|cancelled|abandoned`; `detail` at most 8192 bytes.
 - Audit actions: `credential.invalid`, `credential.reencrypted` (`subject_type` `credential`, `actor_id` NULL, no secrets).
@@ -67,14 +66,14 @@ Poller-local: only `GDD_METHOD` (`avg_50` default, or `clamp_50_86`; undecided i
 
 ### 3.4 Requests to other guides
 
-1. **04:** (a) `rain_in` is computed whenever a usable counter exists and `is_complete` carries coverage; only `tmax_f`, `tmin_f`, `gdd` are NULL below the coverage threshold (04 section 5.7 wording must say so, and use the interval-aware coverage rule in 7.3). (b) `core::crypto::public_key_from_private` is provided by 04 (no request). (c) `app.rollup_dirty_days` grants to `app_poller`: SELECT, INSERT, DELETE, `UPDATE(local_date)`; `app.rate_gates`: SELECT/INSERT/UPDATE. (d) Seed uses exactly: stations `AA:BB:CC:00:00:01..03`, poller credential key `fixture-poller-key` (encrypted with the dev public key), reference ids `USW00099001..3`.
-2. **02:** `AwnDevice { mac, name, coords, timezone }`; `AwnError` variants `Unauthorized`, `RateLimited { retry_after }`, `Unavailable`, `BadResponse`; the **caller** reserves gates (`awn:app:api`, 1000 ms, max wait 3 s; plus `awn:key:<id>` when the caller has a live credential) and maps `GateBusy` to 503 `upstream_busy`; `LiveAwn` takes a per-call timeout (API: 5 s).
+1. **04:** (a) `rain_in` is computed whenever a usable counter exists and `is_complete` carries coverage; only `tmax_f`, `tmin_f` are NULL below the coverage threshold (04 section 5.7 wording must say so, and use the interval-aware coverage rule in 7.3). (b) `core::crypto::public_key_from_private` is provided by 04 (no request). (c) `app.rollup_dirty_days` grants to `app_poller`: SELECT, INSERT, DELETE, `UPDATE(local_date)`; `app.rate_gates`: SELECT/INSERT/UPDATE. (d) Seed uses exactly: stations `AA:BB:CC:00:00:01..03`, poller credential key `fixture-poller-key` (encrypted with the dev public key), reference ids `USW00099001..3`.
+2. **02:** `AwnDevice { mac, name, coords, elevation_ft, timezone }` (`elevation_ft: Option<f64>` from `info.coords.elevation`; field name unverified until T7's first recording; the replay fixtures include it) and `core::acis::AcisApi::nearby_stations` (7.5a) for the baseline picker; `AwnError` variants `Unauthorized`, `RateLimited { retry_after }`, `Unavailable`, `BadResponse`; the **caller** reserves gates (`awn:app:api`, 1000 ms, max wait 3 s; plus `awn:key:<id>` when the caller has a live credential) and maps `GateBusy` to 503 `upstream_busy`; `LiveAwn` takes a per-call timeout (API: 5 s).
 3. **05:** (a) the exact disabled log line in 3.1; (b) `e2e-data` must run `poller run-job awn_backfill` **before** `awn_ingest` (a station with no data gets only one page from ingest, 7.1); (c) replay shifts data once at process start, so no new readings appear later; (d) `backend/demo-fingerprints.txt` must include a line for `CREDENTIALS_PRIVATE_KEY` (and every other local-only secret); production config refuses a match with exactly `refusing <VAR>: demo value` (`<VAR>` = the variable name, never the value), which 05's check greps for; (e) fixtures may be gzipped (`*.json.gz`), repository size budget in section 10.
-4. **06:** the poller's graceful-shutdown grace is **25 s**, so set Fly `kill_timeout` to **30 s**; use the gate names `awn:app:poller` and `awn:key:<credential_id>` (no `gate:` prefix) in any runbook or SQL that inspects `app.rate_gates`; no container healthcheck on Fly; the **go-live variant** (conventions) is poller-only: two healthchecks (`HEALTHCHECK_URL_AWN_INGEST`, `HEALTHCHECK_URL_FORECAST_SNAPSHOT`), no backfill step, and the API/web deploy steps skipped until 02/01 ship (add the other checks when T12 to T14 ship); the post-deploy check should assert "no job has two `running` rows" in `job_runs` (not "the second scheduler writes nothing"); one-off runs are `poller run-job <job> ...` with pool max 2.
+4. **06:** the poller's graceful-shutdown grace is **25 s**, so set Fly `kill_timeout` to **30 s**; use the gate names `awn:app:poller` and `awn:key:<credential_id>` (no `gate:` prefix) in any runbook or SQL that inspects `app.rate_gates`; no container healthcheck on Fly; the **go-live variant** (conventions) is poller-only: one poller healthcheck (`HEALTHCHECK_URL_AWN_INGEST`; the `BACKUP` and `DBSIZE` pings belong to other apps), no backfill step, and the API/web deploy steps skipped until 02/01 ship (add the other checks when T12 to T14 ship); the post-deploy check should assert "no job has two `running` rows" in `job_runs` (not "the second scheduler writes nothing"); one-off runs are `poller run-job <job> ...` with pool max 2.
 
 ### 3.5 Healthcheck pings (contract for 06)
 
-Per scheduled job, when its URL is set (production only): `GET <url>/start` at run start, `GET <url>` on success, `GET <url>/fail` on failure. Timeout 5 s, one retry; failures log `warn` and never fail the job. Periods: `awn_ingest` 5 min (grace 15); `daily_rollup` 1 h (grace 2 h); `reference_sync` 24 h (grace 6 h); `forecast_snapshot` 10 min (grace 30; success ping after every check, with or without a new run). `awn_backfill` and `credential_reencrypt` send no pings. `awn_ingest` sends `/fail` only when every station failed in the run or the last 3 completed runs each had a failed unit (partial failures still ping success so one flaky device does not page).
+Per scheduled job, when its URL is set (production only): `GET <url>/start` at run start, `GET <url>` on success, `GET <url>/fail` on failure. Timeout 5 s, one retry; failures log `warn` and never fail the job. Periods: `awn_ingest` 5 min (grace 15); `daily_rollup` 1 h (grace 2 h); `reference_sync` 24 h (grace 6 h). `awn_backfill` and `credential_reencrypt` send no pings. `awn_ingest` sends `/fail` only when every station failed in the run or the last 3 completed runs each had a failed unit (partial failures still ping success so one flaky device does not page).
 
 ### 3.6 Core public API (owned here; exact names, 02/04/05 consume them)
 
@@ -101,8 +100,7 @@ pub fn load(bin: Binary) -> Result<Config, ConfigError>;        // implemented a
 pub struct PollerConfig { pub app_env: AppEnv, pub enabled: bool, pub awn_mode: AwnMode, pub fixtures_dir: PathBuf,
     pub awn_application_key: Option<SecretString>,
     pub current_key: Option<(i16, CredentialPrivateKey)>, pub previous_key: Option<(i16, CredentialPrivateKey)>,
-    pub gdd_method: GddMethod,
-    pub healthcheck_urls: HashMap<String /* env suffix: "AWN_INGEST", "FORECAST_SNAPSHOT", ... */, SecretString>,
+    pub healthcheck_urls: HashMap<String /* env suffix: "AWN_INGEST", "DAILY_ROLLUP", ... */, SecretString>,
     pub database: PgConnectOptions }
 
 // core::db
@@ -124,11 +122,16 @@ pub fn http_error(e: reqwest::Error) -> HttpErrorKind;          // calls without
 // core::awn
 pub struct ApiKey(SecretString);                                // ApiKey::new(SecretString); Debug prints [REDACTED]
 pub struct Mac(/* upper-case AA:BB:CC:DD:EE:FF */);             // Mac::parse(&str) -> Result<Mac, MacError>; Display; last4()
-pub struct AwnDevice { pub mac: Mac, pub name: Option<String>, pub coords: Option<(f64, f64)>, pub timezone: Option<String> /* lastData.tz */ }
+pub struct AwnDevice { pub mac: Mac, pub name: Option<String>, pub coords: Option<(f64, f64)>, pub elevation_ft: Option<f64> /* info.coords.elevation, unverified */, pub timezone: Option<String> /* lastData.tz */ }
 pub trait AwnApi: Send + Sync { /* list_devices, history: 5.2 */ }
 impl LiveAwn   { pub fn new(app_key: SecretString, call_timeout: Duration) -> Result<Self, AwnError>;
                  #[cfg(any(test, feature = "test-support"))] pub fn with_base(base: Url, app_key: SecretString, call_timeout: Duration) -> Result<Self, AwnError>; }
 impl ReplayAwn { pub fn new(fixtures_root: PathBuf, clock: Arc<dyn Clock>) -> Result<Self, AwnError>; }   // no gates, no DB, no network
+
+// core::acis (delivered by T14, not part of the core milestone; 02's baseline picker uses nearby_stations and may stub the trait until then)
+pub trait AcisApi: Send + Sync { /* station_data (7.5), nearby_stations(bbox) -> Result<Vec<AcisStationMeta>, AcisError> (7.5a) */ }
+impl LiveAcis   { pub fn new(call_timeout: Duration) -> Result<Self, AcisError>; }     // fixed host data.rcc-acis.org, keyless, never reserves gates
+impl ReplayAcis { pub fn new(fixtures_root: PathBuf) -> Result<Self, AcisError>; }
 
 // core::ratelimit
 pub struct GateBusy;
@@ -147,20 +150,19 @@ Tasks T1 to T3 deliver exactly this block (the "03 core milestone" in convention
 ### 4.1 Process model
 
 - `poller run`: config (`core::config`), guards, `PgPool` with `max_connections = 4` (conventions: plus one dedicated detached connection per held job lock; role limit 15), `Clock`, HTTP clients, scheduler. One-off machines use pool max 2.
-- Startup (enabled): run once, sequentially, every **implemented** job in this order: `forecast_snapshot`, `awn_ingest`, `daily_rollup`, `reference_sync` (catch-up, 4.3), then start the timers. The scheduler registers only jobs that exist in the build (a compile-time list), so the first production deploy can ship ingest and forecast alone.
-- Scheduling: one task per job using `tokio::time::interval_at(first_boundary, period)` where `first_boundary` is computed from `clock.now()` wall time and `MissedTickBehavior::Delay`. Boundaries (UTC): `awn_ingest` every 5 min at second 45; `daily_rollup` hourly at minute 7; `reference_sync` daily 11:15; `forecast_snapshot` every 10 min at second 20. `awn_backfill`, `credential_reencrypt` are never scheduled.
+- Startup (enabled): run once, sequentially, every **implemented** job in this order: `awn_ingest`, `daily_rollup`, `reference_sync` (catch-up, 4.3), then start the timers. The scheduler registers only jobs that exist in the build (a compile-time list), so the first production deploy can ship ingest alone.
+- Scheduling: one task per job using `tokio::time::interval_at(first_boundary, period)` where `first_boundary` is computed from `clock.now()` wall time and `MissedTickBehavior::Delay`. Boundaries (UTC): `awn_ingest` every 5 min at second 45; `daily_rollup` hourly at minute 7; `reference_sync` daily 11:15, plus an hourly pickup at minute 20 that loads only reference stations with `last_synced_date IS NULL` (a baseline an owner has just chosen; no `job_runs` row and no ping when there is nothing to load; it takes the same `job:reference_sync` lock, so it never overlaps the daily run). `awn_backfill`, `credential_reencrypt` are never scheduled.
 - No state kept in memory across ticks.
 
 ```
 backend/crates/poller/src/
   main.rs  scheduler.rs  job.rs  keys.rs
-  jobs/{awn_ingest,awn_backfill,daily_rollup,reference_sync,forecast_snapshot,credential_reencrypt}.rs
-  forecast_models.toml
+  jobs/{awn_ingest,awn_backfill,daily_rollup,reference_sync,credential_reencrypt}.rs
 backend/crates/poller/examples/record_fixtures.rs
 backend/crates/core/src/
   config.rs db.rs redact.rs clock.rs ratelimit.rs
-  awn/{mod,live,replay,models}.rs  openmeteo/{mod,live,replay}.rs  acis/{mod,live,replay,parse}.rs
-  time.rs gdd.rs rain.rs forecast.rs heartbeat.rs
+  awn/{mod,live,replay,models}.rs  acis/{mod,live,replay,parse}.rs
+  time.rs rain.rs heartbeat.rs
 ```
 
 `core::clock`: `trait Clock { fn now(&self) -> DateTime<Utc>; }`, `SystemClock`, `FixedClock`. All "now" in jobs, replay shifting and tests goes through it.
@@ -178,10 +180,10 @@ impl JobLock {
 // Drop: the raw connection is dropped, which closes the socket and frees the lock server-side.
 ```
 
-- Key: `i64` from the first 8 bytes (big-endian) of `sha256("job:<name>")`; locks `job:awn_ingest`, `job:awn_backfill`, `job:daily_rollup`, `job:reference_sync`, `job:forecast_snapshot`, `job:credential_reencrypt`.
+- Key: `i64` from the first 8 bytes (big-endian) of `sha256("job:<name>")`; locks `job:awn_ingest`, `job:awn_backfill`, `job:daily_rollup`, `job:reference_sync`, `job:credential_reencrypt`.
 - `try_job_lock` opens a fresh `PgConnection::connect_with(opts)` (same role and TLS as the pool) and runs `SELECT pg_try_advisory_lock($1)`. Never use a pooled connection (a returned pooled connection would keep the lock for a later borrower).
 - If not acquired: `info` "job skipped, lock held", no `job_runs` row, no ping, return (exit code 3 for `run-job`).
-- Loss detection: jobs call `ctx.lock.check().await?` between units of work (per station, page, day, location). `LockLost` aborts the job as `failed` with `detail.error="lock_lost"`; the new holder owns the work.
+- Loss detection: jobs call `ctx.lock.check().await?` between units of work (per station, page, day). `LockLost` aborts the job as `failed` with `detail.error="lock_lost"`; the new holder owns the work.
 - Tests: the lock is free after a job panic, after a cancelled job, and after a normal run (a second `try_job_lock` succeeds immediately in each case).
 
 ### 4.3 `run_job` wrapper and catch-up
@@ -210,7 +212,6 @@ Catch-up is data-driven (`last_success` is context only):
 | `awn_ingest` | per station, fetch enough history to cover `now - max(ts_utc)` (7.1). |
 | `daily_rollup` | consumes the `app.rollup_dirty_days` queue (7.3) plus a start-of-process self-heal for days that have observations but no rollup; with an empty queue and no rollups this is the whole history, in date order. |
 | `reference_sync` | immediately; full load for any reference station with `last_synced_date IS NULL`. |
-| `forecast_snapshot` | checks metadata, fetches the latest run if not stored. Older missed runs are unrecoverable (F2); `detail.run_gap_hours` when the gap to the previous stored run exceeds 1.5 x `update_interval_seconds`. |
 
 ### 4.4 Dead-man's switch
 
@@ -372,7 +373,7 @@ Idempotent, resumable, about 1 page per second per key. Local: replay. Productio
 
 **Which days (queue).** Consumption of `app.rollup_dirty_days`:
 
-1. Self-heal at process start and at the daily housekeeping run only: enqueue (a) dates with observations but no `daily_rollups` row, (b) dates whose `daily_rollups.gdd_method IS DISTINCT FROM` the configured method, (c) rows with `is_complete = false AND local_date < <today standard date>` within the last 60 days (days that were incomplete when last computed but whose data has since stopped changing, for example the day that was still open at the last run). `--from/--to` enqueues that range for the selected stations.
+1. Self-heal at process start and at the daily housekeeping run only: enqueue (a) dates with observations but no `daily_rollups` row, (b) rows with `is_complete = false AND local_date < <today standard date>` within the last 60 days (days that were incomplete when last computed but whose data has since stopped changing, for example the day that was still open at the last run). `--from/--to` enqueues that range for the selected stations.
 2. `SELECT station_id, local_date FROM app.rollup_dirty_days ORDER BY station_id, local_date`. Expand to **whole months**: any dirty day in a month schedules every day of that month that has observations (a counter-choice change therefore re-dirties the whole month, and the current month is reprocessed hourly, about 30 cheap station-days per station).
 3. Per station-day, in date order, **one transaction** (same bounded retry on `40P01`/`40001`; queue and rollup writes are sorted by key): first `DELETE FROM app.rollup_dirty_days WHERE station_id=$1 AND local_date=$2` (this takes the row lock, so an ingest transaction enqueueing the same day waits for our commit and then re-inserts it; nothing is lost), then compute and write. `lock.check()` and a cancel check between days.
 With an empty `job_runs` history this is the full history (every date is enqueued by ingest/backfill or by the self-heal).
@@ -381,7 +382,7 @@ With an empty `job_runs` history this is the full history (every date is enqueue
 
 **Step 1: `rain_inc_in`.** Per station-month: load rows from `month_start - 1 row` through `month_end + GLITCH_LOOKAHEAD_READINGS rows`, compute `core::rain::increments` over that whole contiguous series, and write `rain_inc_in` **only** for rows whose `ts` lies inside the standard day being processed (`UPDATE ... SET rain_inc_in = round($1::float8::numeric,3) WHERE ... AND rain_inc_in IS DISTINCT FROM ...`). The predecessor row and the look-ahead rows are read, never rewritten.
 
-**Coverage and temperatures.** AWN history is 5 or 30 minute data. Per day: `interval = 5 min` if the median gap between that day's consecutive readings is <= 7.5 min, else `30 min`. `covered = count(temp_f IS NOT NULL) * interval`; `coverage = min(1, covered / 24 h)`. `obs_count = count(temp_f IS NOT NULL)` (288 or 48 when complete). `coverage < 0.5`: `tmax_f`, `tmin_f`, `gdd` NULL and `is_complete=false`; `0.5 <= coverage < 0.9`: values computed, `is_complete=false`; `>= 0.9`: `is_complete=true`; a day that includes `now` is always `is_complete=false`. `tmax_f/tmin_f` ignore values outside `[-60, 130]` F (counted in `detail.temp_outliers`). Constants in code; proposals (Q3).
+**Coverage and temperatures.** AWN history is 5 or 30 minute data. Per day: `interval = 5 min` if the median gap between that day's consecutive readings is <= 7.5 min, else `30 min`. `covered = count(temp_f IS NOT NULL) * interval`; `coverage = min(1, covered / 24 h)`. `obs_count = count(temp_f IS NOT NULL)` (288 or 48 when complete). `coverage < 0.5`: `tmax_f`, `tmin_f` NULL (so query-time GDD is NULL) and `is_complete=false`; `0.5 <= coverage < 0.9`: values computed, `is_complete=false`; `>= 0.9`: `is_complete=true`; a day that includes `now` is always `is_complete=false`. `tmax_f/tmin_f` ignore values outside `[-60, 130]` F (counted in `detail.temp_outliers`). Constants in code; proposals (Q3).
 
 **Rain from counters (F6).** `core::rain::increments(rows) -> Vec<Inc{ts, inc: Option<f64>, reset, glitch, capped}>`; constants in `core::rain::consts` (all proposals, Q3):
 
@@ -404,11 +405,7 @@ With an empty `job_runs` history this is the full history (every date is enqueue
 
 **Reconciliation (post-go-live, optional: implement last, T16).** Until it exists, write `rain_reconcile_status='unchecked'`, `awn_daily_rain_in` and `rain_reconcile_diff_in` NULL. When implemented: wall-clock window `(start, end]` from `wall_day_bounds(timezone, local_date)` (`start` = console local midnight); rows with `ts > start && ts <= end`, using the increments already computed in the month series (so the next midnight row is included once it exists; the 4-hour dirty look-back in 7.1 re-dirties the day when it arrives). `console_rain_in = sum(inc)`; `awn_daily_rain_in = max(rain_daily_in)`; status `unchecked` when the month's counter is `rain_daily_in`, `no_awn_total` when `rain_daily_in` is NULL in the window, `mismatch` when `|console - awn| > max(RECON_ABS_IN, RECON_REL * awn)`, else `ok`; store the diff. `rain_in` stays the standard-day value. Assumes the console clock zone equals `stations.timezone` (Q4).
 
-**GDD.** `core::gdd::daily_gdd(method, tmax_f, tmin_f)` (base 50 F implied by the method):
-- `avg_50`: `max(0, (tmax + tmin)/2 - 50)`.
-- `clamp_50_86`: `tmax' = clamp(tmax, 50, 86)`, `tmin' = clamp(tmin, 50, 86)`, `(tmax' + tmin')/2 - 50`.
-
-Stored with `gdd_method` on `daily_rollups` (`gdd` NULL when temperatures are NULL; `gdd_method` is NOT NULL per 04 and is always the configured method).
+**GDD is not computed here.** `daily_rollups` stores only `tmax_f`/`tmin_f`; the API computes growing degree days at query time with 04's `app.gdd_day` (method, base and start date are request parameters, 02 5.5), so a change of method never needs a rollup rewrite or backfill. (Owner decision, Oct 7, 2026; the former `core::gdd`, `GDD_METHOD` and the stored `gdd`/`gdd_method` columns are gone.)
 
 **Write** per station-day: `INSERT ... ON CONFLICT (station_id, local_date) DO UPDATE ... WHERE (...) IS DISTINCT FROM (...)`, with `computed_at = now()` on change.
 
@@ -418,7 +415,7 @@ Stored with `gdd_method` on `daily_rollups` (`gdd` NULL when temperatures are NU
 
 ACIS `StnData`, `POST https://data.rcc-acis.org/StnData`. Docs: `https://www.rcc-acis.org/docs_webservices.html` (confirmed: `sid`, `sdate`, `edate`, `elems`, JSON output, flags `M`, `T`, `S`, `A`, `add=f`). Request/response examples are from the documentation as remembered and **must be confirmed against the first recorded fixture**.
 
-Iterates `app.reference_stations` (rows created by `admin add-reference-station`; `id` is the GHCN-Daily id; ACIS accepting it as `sid` is assumed, T14).
+Iterates `app.reference_stations` (rows created by `admin add-reference-station` or by the API's baseline picker, 02 5.10; `id` is the GHCN-Daily id; ACIS accepting it as `sid` was confirmed for `USW00094035`, `USW00024144` and `USW00024022` on Oct 7, 2026 with live `StnData` and `StnMeta` calls).
 
 ```json
 {"sid":"USW00024144","sdate":"1991-01-01","edate":"2026-10-01",
@@ -438,42 +435,29 @@ Parser (`core::acis::parse`) accepts per element a bare string or `[value, flag]
 
 `quality_flags` is the comma-joined entries (`m`=max, `n`=min, `p`=precip). Trace counts as 0 in cumulative sums (02's job). Percentile-year eligibility (maximum missing days) is 02's decision (Q2).
 
-Per station: `last_synced_date IS NULL` -> load from `REFERENCE_START_YEAR-01-01` (1991) through yesterday (UTC) in one request; else refresh from `sdate = min(last_synced_date + 1 day, yesterday - 13 days)` (so a station that was last synced long ago catches up fully, and a recent one still re-reads 14 days of possible revisions). **GDD is computed in the upsert itself** from the incoming temperatures: for each row `gdd = core::gdd(method, tmax_f, tmin_f)` and `gdd_method = $method` when **both** temperatures are non-null, otherwise both NULL (04 CHECK), written in the same `INSERT ... ON CONFLICT (reference_station_id, date) DO UPDATE ... WHERE (...) IS DISTINCT FROM (...)` including `gdd` and `gdd_method` in the compared tuple, so a revised temperature never leaves a stale GDD. A method change is repaired by a bounded pass on each run: rows with `gdd_method IS DISTINCT FROM $method` and both temperatures non-null are recomputed in Rust and updated. Finally `UPDATE reference_stations SET last_synced_date = <last date returned>`, but only when the response contained at least one row (a refresh that returns no rows leaves `last_synced_date` unchanged). One station per request, 1 s apart, timeout 60 s, 3 retries on 5xx. F5: airport `USW` days are midnight-to-midnight local standard time (assumption). Candidates: Helena `USW00024144`, Laramie `USW00024022`, Loveland airport TBD (Q2). Locally the fixtures use ids `USW00099001..3` (conventions).
+Per station: `last_synced_date IS NULL` -> load from `REFERENCE_START_YEAR-01-01` (1991) through yesterday (UTC) in one request; else refresh from `sdate = min(last_synced_date + 1 day, yesterday - 13 days)` (so a station that was last synced long ago catches up fully, and a recent one still re-reads 14 days of possible revisions). Rows are written with `INSERT ... ON CONFLICT (reference_station_id, date) DO UPDATE ... WHERE (...) IS DISTINCT FROM (...)` over `tmax_f, tmin_f, precip_in, precip_trace, quality_flags`, so a revised value is picked up. **No GDD is computed or stored** (04 `app.gdd_day` does it at query time). Finally `UPDATE reference_stations SET last_synced_date = <last date returned>`, but only when the response contained at least one row (a refresh that returns no rows leaves `last_synced_date` unchanged). One station per request, 1 s apart, timeout 60 s, 3 retries on 5xx. F5: airport `USW` days are midnight-to-midnight local standard time (assumption). Baselines: Helena `USW00024144` (record from 1938-04-01), Laramie `USW00024022` (from 1948-01-01) and Loveland: Northern Colorado Regional Airport (FNL), `USW00094035` (from 2011-10-01; only about 14 complete seasons, so its percentile bands are thin). `REFERENCE_START_YEAR = 1991` caps how far back any of them is loaded. Locally the fixtures use ids `USW00099001..3` (conventions).
 
-### 7.6 `forecast_snapshot` (F1, F2)
+#### 7.5a ACIS `StnMeta` search (`core::acis`, used by 02's baseline picker; not a poller job)
 
-Open-Meteo facts: metadata API `https://open-meteo.com/en/docs/model-updates` (confirmed fields `last_run_initialisation_time`, `last_run_availability_time`, `update_interval_seconds`, `temporal_resolution_seconds`; wait 10 minutes after availability); Ensemble API `https://open-meteo.com/en/docs/ensemble-api` (base `https://ensemble-api.open-meteo.com/v1/ensemble`; per-member series; precipitation is a preceding-hour sum; free for non-commercial use); Previous Runs `https://open-meteo.com/en/docs/previous-runs-api` (same models as the forecast API, mostly from January 2024, ensemble coverage not stated).
+The same `core::acis` client also exposes `AcisApi::nearby_stations(bbox) -> Result<Vec<AcisStationMeta>, AcisError>`; the API calls it when an owner connects a station (02 5.10). Verified against the live service on Oct 7, 2026 (docs: `https://www.rcc-acis.org/docs_webservices.html`):
 
-**Models** in `backend/crates/poller/forecast_models.toml` (two models; the strings and numbers below are the commonly documented ones and **T9 is not done until each is confirmed against a recorded response and metadata fixture**):
-
-```toml
-[[model]]
-key = "ecmwf_ifs025"  api_name = "ecmwf_ifs025"  meta_domain = "ecmwf_ifs025_ensemble"
-members_total = 51          # control + 50 perturbed
-forecast_days = 15
-max_lead_hours = { "00" = 360, "06" = 144, "12" = 360, "18" = 144 }   # keyed by run hour UTC; 06Z/18Z runs are shorter
-[[model]]
-key = "gfs025"  api_name = "gfs025"  meta_domain = "ncep_gefs025"
-members_total = 31          # control + 30
-forecast_days = 10          # 10 days, not 16
-max_lead_hours = { "00" = 240, "06" = 240, "12" = 240, "18" = 240 }   # native 3-hourly steps, interpolated to hourly by Open-Meteo
+```json
+POST https://data.rcc-acis.org/StnMeta
+{"bbox":"-105.4,40.1,-104.7,40.7","meta":"name,sids,ll,elev,valid_daterange","elems":"pcpn,maxt,mint"}
 ```
+```json
+{"meta":[{"ll":[-105.01667,40.45],"sids":["94035 1","FNL 3","KFNL 5","USW00094035 6","USW00094035 32"],"elev":5015.0,
+          "valid_daterange":[["2011-10-01","2026-10-05"],["2011-10-01","2026-10-06"],["2011-10-01","2026-10-06"]],
+          "name":"FORT COLLINS LOVELAND AP"}]}
+```
+- `bbox` is `west,south,east,north` in degrees; `ll` is `[lon, lat]`; `elev` is feet; `valid_daterange` has one `[start, end]` per element **in the order of `elems`** (here pcpn, maxt, mint) and is `[]` for an element the station never reported (rainfall-only volunteer stations show `[[...], [], []]`).
+- Each `sids` entry is `"<id> <type>"`: type 1 WBAN, 2 COOP, 3 FAA, 4 WMO, 5 ICAO, 6 GHCN-Daily, 7 NWSLI, 10 CoCoRaHS; other types (for example the duplicate GHCN entry with type 32) are ignored. `AcisStationMeta { ghcn_id: Option<String> (type 6), icao: Option<String> (type 5), faa: Option<String> (type 3), name, lat, lon, elevation_ft: Option<f64>, pcpn/maxt/mint: Option<(NaiveDate, NaiveDate)> }`.
+- Request: POST, JSON, no key, no redirects, timeout passed by the caller (the API passes 5 s), response read with `chunk()` and aborted past 512 KiB (a 0.7 by 0.6 degree box returns well under that; the API's box has a half-width of 0.9 degrees of latitude, i.e. 1.8 degrees tall, and the same distance in longitude (`0.9 / cos(lat)` degrees, 02 4.15)), errors through `without_url()`. The caller reserves the rate gate `acis:api` (02); `core::acis` never reserves. `AcisError::{Unavailable, BadResponse}`; an empty `meta` array is `Ok(vec![])`.
+- `ReplayAcis::nearby_stations` serves `acis/stnmeta__<tag>.json` (10): the file whose recorded centre is nearest to the requested box centre (within 1 degree), otherwise `stnmeta__empty.json`; the tag `unavailable` (a request whose centre is within 0.05 degrees of a marker coordinate documented in the fixtures README) returns `AcisError::Unavailable`, which is how the API's ACIS-down tests run without a mock server.
 
-Metadata URL (verify): `https://api.open-meteo.com/data/<meta_domain>/static/meta.json`. Other models (ICON, GEM) are possible later (Q7).
+### 7.6 (removed) no forecast job
 
-**Response shape** (from the ensemble docs; confirm against the fixture): with several locations the body is a JSON array, one object per location in request order, each with `hourly.time` (unix seconds with `timeformat=unixtime`), `hourly.precipitation` (the control member) and `hourly.precipitation_member01` ... `precipitation_memberNN`. Hourly values are `Option<f64>`: a JSON `null` member-hour is **missing data** (the window is dropped), never a decode error. The parser **asserts** the number of precipitation series equals `members_total`; otherwise the model/run is skipped with `detail.skipped_reason="member_count_mismatch"` and an `error` log.
-
-Per tick (every 10 min), for each model:
-
-1. GET meta; skip unless `now >= availability + 10 min`. `run = last_run_initialisation_time`.
-2. Locations lacking this run: `forecast_locations` joined to enabled stations with no `forecast_runs` row for `(location_id, model, run)`. None: done (this also covers newly added locations).
-3. One request for all those locations: `latitude`/`longitude` comma lists, `hourly=precipitation`, `models=<api_name>`, `forecast_days`, `precipitation_unit=inch`, `timezone=UTC`, `timeformat=unixtime`. The client rejects any URL containing `apikey`.
-4. Re-read meta; if `last_run_initialisation_time` changed, discard and retry next tick.
-5. Aggregate (`core::forecast::aggregate`, pure): window starts `S in {00,06,12,18}Z`; the window covers hourly values labelled `S+1h .. S+6h`; member total = their sum. Drop windows with any member-hour missing, with `S < run`, or whose end `S+6h > run + max_lead_hours[run_hour]`. `p10/p50/p90` = type-7 percentiles over member totals; `prob_precip = 100 * fraction(total >= 0.01 in)`. Row: `variable='precip_6h_in'` (the only value, conventions), `valid_time=S`, `period_hours=6`.
-6. One transaction per `(model, run)` covering all those locations: `INSERT INTO forecast_runs (location_id, model, run_time, row_count) ... ON CONFLICT DO NOTHING`, then `forecast_snapshots ... ON CONFLICT DO NOTHING` (no `fetched_at` on snapshots; it is on `forecast_runs`).
-7. `detail`: `{models:[{model, run_time, locations, rows, skipped_reason}], run_gap_hours}`.
-
-Volume: 3 locations x 2 models x about 60 windows x 4 runs/day is about 0.5 M rows/yr; check against F1 (Q7). F2: only deterministic models are documented as archived; no ensemble archive verified (Q9). Terms: free non-commercial tier, CC BY 4.0 credit in the footer and on forecast charts (01-web); published free limits to verify: 600/min, 5 000/h, 10 000/day; this job uses about 144 metadata plus 8 to 16 data calls per day. Never send `apikey`.
+Decided Oct 7 (proposals/06, option A): the poller has no `forecast_snapshot` job, no `forecast_models.toml`, no Open-Meteo client, no model-run metadata polling (about 144 calls a day gone), no `FORECAST_SNAPSHOT` healthcheck, no startup catch-up step for forecasts and no forecast tables or grants. Forecasts, ensemble percentiles and the forecast-change view are produced by the API on request (02 section 5.6) and held only in its in-memory cache. Percentiles are used only in live forecast charts; there is no percentile history. The ensemble aggregation tests, `core::forecast` and the Open-Meteo fixtures moved to the `api` crate (02). Section number kept so references to 7.5 and 7.7 stay valid.
 
 ## 8. Logging, redaction, metrics (S7)
 
@@ -497,8 +481,10 @@ awn/devices_rate_limited.json       # fixture-ratelimited-key -> RateLimited
 awn/stations/<MAC>/device.json      # fixture-poller-key: one /devices element (macAddress, lastData, info) per seeded station
 awn/stations/<MAC>/history/page-0001.json[.gz] ...   # newest first, raw AWN arrays, <=288 each
 acis/<ID>__<sdate>__<edate>.json    # ID in USW00099001..USW00099003, >= 12 complete years each, recorded data renamed
-open-meteo/meta/<meta_domain>__<n>.json
-open-meteo/ensemble/<api_name>__<run_unix>.json   # multi-location array, member series as in 7.6
+acis/stnmeta__loveland.json         # recorded StnMeta response (7.5a) for a box around 40.4N 105.0W: contains FNL USW00094035, volunteer COOP/CoCoRaHS stations and a rainfall-only station
+acis/stnmeta__helena.json, stnmeta__laramie.json   # same for the other two seeded areas (nearest-airport suggestion tests)
+acis/stnmeta__empty.json            # {"meta":[]}: no station in range
+acis/stnmeta__nocandidates.json     # only COOP/CoCoRaHS/closed stations: nothing passes the airport filter (02 5.10)
 test/<case>/...                      # synthetic scenarios for unit/integration tests, same layout (T6 uses these, not real recordings)
 ```
 
@@ -511,15 +497,15 @@ test/<case>/...                      # synthetic scenarios for unit/integration 
 - `history(mac, end_date, limit)`: **merge all pages of the station into one series**, sorted newest first and deduplicated by `dateutc`; return the `limit` newest rows with `dateutc <= E` (after unshifting; `None` means no upper bound). Paging therefore terminates with an empty page after the oldest row.
 - The caller (the job) still reserves gates in replay; `ReplayAwn` itself does not.
 
-`ReplayAcis`: serves the file for the requested `sid`, slicing rows by `sdate..edate`; no shifting. `ReplayOpenMeteo`: the meta sequence advances **once per tick** (`begin_tick()` is called by the job at the start of each run; the first tick serves `__1`, later ticks `__2`, ... with the last repeated). **Forecast shift** applied to every timestamp in the meta files (`last_run_initialisation_time` and `last_run_availability_time`) and ensemble `time` arrays: a **whole multiple of 24 h** so the recorded run hour is kept, `shift = 24 h * floor((now - 10 min - avail) / 24 h)` with `run`/`avail` from meta `__1`; this guarantees `avail + shift + 10 min <= now` (the replayed run is already past its availability wait at start time) and the shifted run is less than 24 h old. The ensemble file is matched by `<api_name>__<run_unix>` of the meta just served (after unshifting). Tests run several start times (for example 00:03, 05:59, 06:09, 11:50 UTC), assert the run hour is unchanged and a run is fetched on the first tick in each.
+`ReplayAcis`: serves the file for the requested `sid`, slicing rows by `sdate..edate`; no shifting. **A `sid` with no fixture file returns an empty result** (`Ok` with zero rows, not an error), logged once per `sid` per process at `info` ("no ACIS fixture for sid, replaying empty"); the job therefore succeeds, writes no rows, leaves `last_synced_date` NULL or unchanged, and does not retry (no retry storm; the hourly pickup of never-synced stations simply tries again next hour, cheaply). This is what a baseline chosen from the `stnmeta__*.json` candidates (for example `USW00094035` before a `StnData` fixture exists for it) gets in local and CI replay. Open-Meteo fixtures and their replay client belong to the API (02 section 5.6 and its fixtures), not the poller.
 
-Recording and deriving: `cargo run -p poller --example record_fixtures -- awn --mac <real MAC> --as AA:BB:CC:00:00:01 --days 60` records one real station (AWN key from an interactive prompt or stdin only, S7; dev application key; refuses in production) and writes sanitised files (placeholder MAC, `info.coords` fuzzed to 1 decimal, no address/name). One recording becomes three stations offline with `-- derive --from AA:BB:CC:00:00:01 --as AA:BB:CC:00:00:02 --temp-offset-f -3.0 --rain-scale 1.15` (deterministic: shifts temperatures, scales rain counters, keeps timestamps), and again for `...:03`; the derived stations keep their own counters so month-long counter-choice and reset cases stay realistic. `-- acis --sid <real id> --as <USW0009900N>` and `-- open-meteo` save raw responses with ids renamed.
+Recording and deriving: `cargo run -p poller --example record_fixtures -- awn --mac <real MAC> --as AA:BB:CC:00:00:01 --days 60` records one real station (AWN key from an interactive prompt or stdin only, S7; dev application key; refuses in production) and writes sanitised files (placeholder MAC, `info.coords` fuzzed to 1 decimal, no address/name). One recording becomes three stations offline with `-- derive --from AA:BB:CC:00:00:01 --as AA:BB:CC:00:00:02 --temp-offset-f -3.0 --rain-scale 1.15` (deterministic: shifts temperatures, scales rain counters, keeps timestamps), and again for `...:03`; the derived stations keep their own counters so month-long counter-choice and reset cases stay realistic. `-- acis --sid <real id> --as <USW0009900N>` saves raw responses with ids renamed. (Open-Meteo recording moved to the API crate's own example, 02.)
 
-Fixture lint test fails on 32+ hex strings, MACs outside `AA:BB:CC:00:..`, coordinates with more than 1 decimal, ACIS fixtures with fewer than 12 complete years, fewer than 60 days per MAC, or total size over budget.
+Fixture lint test fails on 32+ hex strings, MACs outside `AA:BB:CC:00:..`, coordinates with more than 1 decimal in `awn/`, any `latitude`/`longitude`/`lat`/`lon` value in `open-meteo/` farther than 0.25 degrees from every seed city-centre coordinate in `ops/db/seed/seed.toml` (Open-Meteo echoes grid-snapped values), any coordinate in `acis/` that is not the public coordinate of the ACIS station named in that file's name or a seed city centre (public station coordinates are allowed; family homes never), ACIS fixtures with fewer than 12 complete years, fewer than 60 days per MAC, or total size over budget.
 
 ## 11. Implementation tasks
 
-Order matters: forecast snapshots and station history cannot be rebuilt, so ingest and forecast go live first; backfill, rollups and reference sync can be rebuilt from stored data afterwards. Every day of delay is a permanent forecast gap. T1 to T3 are the **03 core milestone** (conventions): the block in 3.6, delivered before 04's `admin` and 02 build on it.
+Order matters: station history cannot be rebuilt (AWN keeps only a limited history, F3), so ingest goes live first; backfill, rollups and reference sync can be rebuilt from stored data afterwards. Every day of delay is a permanent gap in station data. Forecasts are not a reason to go live early: the API fetches them live (proposals/06). T1 to T3 are the **03 core milestone** (conventions): the block in 3.6, delivered before 04's `admin` and 02 build on it.
 
 - [ ] **T1 Config, db, clock.** `core::config` (`load(Binary)`, `Config` enum, every shared refusal, demo-fingerprint refusal with the exact message), `core::db::pool` with `PoolSpec` defaults, `core::clock`. Done when it compiles and the guard unit tests pass, including a production run refusing a demo value with `refusing <VAR>: demo value`.
 - [ ] **T2 Redaction.** `core::redact` (`register`, `scrub`, `init_tracing`, `install_panic_hook` logging file:line and a fixed message only, `http_error`). Done when it compiles and the log-redaction and panic-hook unit tests (12.1) pass.
@@ -530,12 +516,12 @@ Order matters: forecast snapshots and station history cannot be rebuilt, so inge
 - [ ] **T6 AWN history, backoff, credential rules.** `LiveAwn` behaviour (timeouts, body cap), `ReplayAwn::history` (shifting, merged series), `awn_call` with backoff and the end-of-run 401 rule, guarded credential writes. Uses synthetic fixtures under `backend/fixtures/test/` (not real recordings). Done when wiremock and replay tests pass.
 - [ ] **T7 Recorder and real fixtures.** Recorder example with `--as`/`derive`; Rodney records one real station with his own dev key (agents prepare, Rodney runs); the three seeded stations; verify or replace the T3 connect-flow files; lint. Done when lint passes and mismatches with 5.1/7.1 are written to section 14 in the same PR.
 - [ ] **T8 `awn_ingest`.** Mapping with coercion, dedupe, upsert, dirty-day enqueue, empty-station behaviour, gap warning. Done when replay integration and idempotency tests pass.
-- [ ] **T9 `forecast_snapshot`.** `forecast_models.toml`, Open-Meteo client, aggregation, per-run `max_lead_hours`, member assertion, null handling, transactional write. Done when aggregation unit tests and replay tests pass **and** every model/meta string, member count and lead-hour value is confirmed against a committed recorded response.
-- [ ] **T10 Replay integration suite.** Compose end to end (12.2) for ingest and forecast. Done when `make test-backend` passes and Compose with `AWN_MODE=replay POLLER_ENABLED=true` shows `success` rows in `job_runs` plus observation and forecast rows.
-- [ ] **T11 Production go-live gate.** Agents prepare a checklist for Rodney (agents never deploy): migrations applied, stations and credentials added via `admin`, Fly secrets set including **only** `HEALTHCHECK_URL_AWN_INGEST` and `HEALTHCHECK_URL_FORECAST_SNAPSHOT`, `famweather-poller` deployed with only the implemented jobs registered. Done when Rodney confirms production `success` runs for `awn_ingest` and `forecast_snapshot` and the first pings arrived. Do not start T12 to T16 before this unless T11 is blocked.
+- [ ] **T9 (removed).** No forecast job (proposals/06). The number is kept so T10 to T16 references stay valid.
+- [ ] **T10 Replay integration suite.** Compose end to end (12.2) for ingest. Done when `make test-backend` passes and Compose with `AWN_MODE=replay POLLER_ENABLED=true` shows `success` rows in `job_runs` plus observation rows.
+- [ ] **T11 Production go-live gate.** Agents prepare a checklist for Rodney (agents never deploy): migrations applied, stations and credentials added via `admin`, Fly secrets set including **only** `HEALTHCHECK_URL_AWN_INGEST` (the `BACKUP` and `DBSIZE` pings belong to other apps), `famweather-poller` deployed with only the implemented jobs registered. Done when Rodney confirms production `success` runs for `awn_ingest` and the first pings arrived. Do not start T12 to T16 before this unless T11 is blocked.
 - [ ] **T12 `awn_backfill`.** Done when the backfill replay tests pass.
-- [ ] **T13 `daily_rollup`.** `core::rain`, `core::gdd`, `core::time`, queue consumption, month expansion, coverage; reconciliation stays `unchecked`. Done when unit and rollup integration tests pass.
-- [ ] **T14 `reference_sync`.** ACIS client, parser, GDD fill, `USW00099001..3` fixtures. Done when parser unit and replay tests pass; then add `HEALTHCHECK_URL_REFERENCE_SYNC`/`_DAILY_ROLLUP` in production.
+- [ ] **T13 `daily_rollup`.** `core::rain`, `core::time`, queue consumption, month expansion, coverage; reconciliation stays `unchecked`. Done when unit and rollup integration tests pass.
+- [ ] **T14 `reference_sync`.** ACIS client (`station_data` and `nearby_stations`, 7.5a), parser, hourly pickup of `last_synced_date IS NULL`, `USW00099001..3` and `stnmeta__*` fixtures. Done when parser unit and replay tests pass; then add `HEALTHCHECK_URL_REFERENCE_SYNC`/`_DAILY_ROLLUP` in production.
 - [ ] **T15 `credential_reencrypt`.** Done when the rotation integration test passes.
 - [ ] **T16 Rain reconciliation (optional, post-go-live).** `wall_day_bounds`, window `(start, end]`, statuses. Done when the reconciliation tests pass; skip if it complicates the rollup.
 
@@ -547,17 +533,13 @@ Harness (conventions): `make test-backend` runs the `test-backend` Compose servi
 
 Rain (`core::rain`): monotone counter; reset `[1.20, 1.25, 0.00, 0.04]` gives `0.05, 0, 0.04` and one reset; **glitch `1.20 -> 0.30 -> 1.20` gives increments 0, 0 and no reset**; `1.20 -> 0.30 -> 1.25` gives `0, 0.05`; a drop under `GLITCH_MIN_DROP_IN` is a reset; a drop that never returns within 6 readings is a reset; `0.00 -> 5.00` in 5 min is capped to 0, and so is a 0.6 in jump in 5 min; a 4.0 in jump over a 4 h gap (cap `min(0.5*48, 4.0) = 4.0`) is accepted; null ends give NULL; the first row of a day uses its predecessor only when the predecessor's chosen counter is non-null; the counter is chosen per station-month and is the same for every day of the month; fallback to `rain_daily_in`; noise ignored; reconcile `ok`/`mismatch`/`no_awn_total`/`unchecked` (`unchecked` whenever the counter is `rain_daily_in`); the `(start, end]` window excludes the 00:00 reading's carried increment.
 
-Coverage: 288 readings at 5 min and 48 at 30 min both give `is_complete=true`; 30-minute data with 20 readings (coverage 0.42) gives NULL `tmax_f/tmin_f/gdd` and `is_complete=false`; 30-minute data with 40 readings (0.83) computed but incomplete.
+Coverage: 288 readings at 5 min and 48 at 30 min both give `is_complete=true`; 30-minute data with 20 readings (coverage 0.42) gives NULL `tmax_f/tmin_f` and `is_complete=false`; 30-minute data with 40 readings (0.83) computed but incomplete.
 
 Time: `America/Denver` 2026-03-08 and 2026-11-01 standard bounds 07:00Z to 07:00Z, 24 h, while `wall_day_bounds` is 23 h and 25 h; `06:59:59Z` -> previous date, `07:00:00Z` -> next; Phoenix constant; Sydney base offset; `standard_date` equals SQL `app.lst_date`; stored-offset mismatch warning.
 
-GDD: `avg_50` and `clamp_50_86` for `(95,60)` (27.5 vs 23.0), `(45,30)` (0, 0), `(70,40)` (5.0 vs 10.0).
-
-ACIS parse: bare and `[value, flag]` forms, `T`, `M`, `S`, `1.20A`, empty, malformed, golden recorded response, `quality_flags` format.
+ACIS parse: bare and `[value, flag]` forms, `T`, `M`, `S`, `1.20A`, empty, malformed, golden recorded response, `quality_flags` format. StnMeta parse: the recorded `stnmeta__loveland.json` yields FNL with `ghcn_id` `USW00094035`, `icao` `KFNL`, `faa` `FNL`, `elevation_ft` 5015 and three date ranges in `pcpn, maxt, mint` order; a rainfall-only station has `None` for `maxt` and `mint`; unknown sid types are ignored; `ll` is read as `[lon, lat]`; `{"meta":[]}` is `Ok(vec![])`; a body past 512 KiB or invalid JSON is `BadResponse`; a 5xx or timeout is `Unavailable`; errors carry no URL. Replay: `ReplayAcis` asked for an unknown `sid` returns an empty `Ok` result and logs once (a second call for the same `sid` logs nothing); a `reference_sync` run in replay with a reference station that has no fixture succeeds with that station contributing zero rows, `last_synced_date` unchanged, and no retry or error row.
 
 AWN mapping: every row of 7.1 including coercion: `humidity` 100.4 -> 100, 101 -> NULL, `winddir` 361 -> NULL, `uv` -2 -> NULL, a string for a numeric -> NULL, negative rain -> NULL, counted in `detail.bad_values`; `lastRain` parse; `dateutc` ms.
-
-Forecast aggregation: synthetic 51-member ensemble with known p10/p50/p90 and `prob_precip` (0 to 100); window labelling; `valid_time` is the window start; windows past `max_lead_hours` for 06Z/18Z runs dropped; member-count mismatch rejected.
 
 Crypto: round trip via 04's `encrypt_credential`/`decrypt_credential`; `KeyRing::decrypt_row` picks the right key by version; wrong AAD, unknown version and tampering fail.
 
@@ -567,11 +549,10 @@ Config: every guard. Log redaction (S7, required): register `TESTKEY-abcdef12345
 
 - `awn_ingest` with `fixture-poller-key`: three stations ingested, timestamps shifted so the newest is `now`, `last_observed_at`, `credentials.last_ok_at`, `job_runs` success. Unknown device reported, missing device counted, disabled station and `invalid`/`replaced` credentials skipped. Catch-up: data ending 3 h ago is filled; a 13-day gap stops at 12 pages, records `detail.gaps` and logs the remedy, and `last_observed_at` never moves backwards; the stop condition `oldest <= last` ends paging.
 - 30-minute test scenario: ingest and rollup produce `is_complete=true` days with 48 readings.
-- Rollup end to end: current-year days exist after replay ingest and backfill; the reset, glitch and capped-spike scenario gives the expected `rain_in`, `rain_resets`, `rain_capped`; a late-arriving row enqueues its day and (within 4 h of a boundary) the previous day, nothing else; an ingest that commits during a rollup transaction is not lost, including the **row-already-queued interleaving** (the day is queued, the rollup's `DELETE` is open, the ingest's `ON CONFLICT DO UPDATE` blocks on the row lock until the rollup commits and then re-inserts the day: test with two connections and explicit transaction ordering); a month with one dirty day reprocesses every day of that month, so a counter-choice change rewrites the whole month; `rain_inc_in` is written only inside the processed day and the predecessor row is never rewritten; changing `GDD_METHOD` self-heals every day; an empty `job_runs` history processes full history in date order; two concurrent rollups cannot both run (lock). Post-backfill rollup waits for a held `job:daily_rollup` lock (bounded) and then runs the backfilled range.
+- Rollup end to end: current-year days exist after replay ingest and backfill; the reset, glitch and capped-spike scenario gives the expected `rain_in`, `rain_resets`, `rain_capped`; a late-arriving row enqueues its day and (within 4 h of a boundary) the previous day, nothing else; an ingest that commits during a rollup transaction is not lost, including the **row-already-queued interleaving** (the day is queued, the rollup's `DELETE` is open, the ingest's `ON CONFLICT DO UPDATE` blocks on the row lock until the rollup commits and then re-inserts the day: test with two connections and explicit transaction ordering); a month with one dirty day reprocesses every day of that month, so a counter-choice change rewrites the whole month; `rain_inc_in` is written only inside the processed day and the predecessor row is never rewritten; an empty `job_runs` history processes full history in date order; two concurrent rollups cannot both run (lock). Post-backfill rollup waits for a held `job:daily_rollup` lock (bounded) and then runs the backfilled range.
 - Backfill: 60 days of replay history, 288 rows per page; `--max-pages 2` stops with `backfill_floor_ts` set; a rerun resumes and ends on an empty page; another run finishes immediately; `--restart` inserts and updates 0; one `job_runs` row per station; no pings are sent; duplicate `dateutc` in a page does not break the upsert; `--restart --since <date>` fills an ingest gap.
 - Empty-station ingest fetches exactly one page and logs no gap warning; a gap over 12 pages logs the `awn_backfill --restart --since` remedy text.
-- Reference sync with `USW00099001..3` (a refresh with no rows leaves `last_synced_date` unchanged; `sdate = min(last_synced_date + 1, yesterday - 13)` for both a recent and a long-stale station; a revised temperature in a re-fetch updates `gdd` in the same upsert; a NULL temperature makes `gdd` and `gdd_method` NULL): loads; `T` gives NULL precip and `precip_trace=true`; GDD filled only where both temperatures are non-null; a method change refills on the next run; the second run refreshes only 14 days; `last_synced_date` updated.
-- Forecast: meta sequence run A, A, B writes A once and B once; a new `forecast_locations` row gets the current run on the next tick; a meta change between fetch and re-check discards; a second identical run changes nothing; a 06Z run drops windows beyond its shorter lead; a `null` member-hour drops that window without an error; `gfs025` windows stop at 240 h; replay start-time matrix (00:03, 05:59, 06:09, 11:50 UTC) fetches a run on the first tick.
+- Reference sync with `USW00099001..3` (a refresh with no rows leaves `last_synced_date` unchanged; `sdate = min(last_synced_date + 1, yesterday - 13)` for both a recent and a long-stale station; a revised temperature in a re-fetch updates the row): loads; `T` gives NULL precip and `precip_trace=true`; the second run refreshes only 14 days; `last_synced_date` updated. Pickup: a newly inserted `reference_stations` row (`last_synced_date IS NULL`) is fully loaded by the hourly pickup within the hour, an hourly pickup with nothing to load writes no `job_runs` row, and the pickup never runs while the daily run holds the lock.
 - `credential_reencrypt` (a row with `key_version` above current is only reported in `detail.above_current`, never decrypted): rows at versions 1 and 2 (including a `replaced` row), current 2: all become 2, decrypt returns the originals, `audit_log` rows written, a rerun changes nothing; a row whose ciphertext is altered between read and update fails the three-part CAS and is skipped.
 
 ### 12.3 Idempotency, locks, gates, errors, shutdown
@@ -597,7 +578,7 @@ Config: every guard. Log redaction (S7, required): register `TESTKEY-abcdef12345
 - [ ] Production guards tested; the poller connects only as `app_poller` (log `current_user` once).
 - [ ] `core` feature `decrypt` enabled only by `poller`; CI fails if `api` enables it; decrypted keys never cached across runs.
 - [ ] Re-encryption CAS has the three-part predicate.
-- [ ] Open-Meteo client cannot send an `apikey`.
+- [ ] The poller makes no Open-Meteo call (no client, no egress need, no `FORECAST_SNAPSHOT` ping).
 - [ ] Fixture lint passes; `job_runs.detail` and `audit_log.detail` contain no secrets or upstream bodies and stay under their CHECKs.
 - [ ] The poller connects over the direct connection only; production config refuses port 6543 and any pooler host (C3), so dropping a lock connection frees the lock.
 - [ ] `poller healthcheck` loads no secrets and makes no network calls.
@@ -605,15 +586,14 @@ Config: every guard. Log redaction (S7, required): register `TESTKEY-abcdef12345
 
 ## 14. Open questions and assumptions
 
-- **Q1 GDD method (undecided).** `avg_50` vs `clamp_50_86`; one choice for station and reference. `GDD_METHOD` default `avg_50` is a placeholder; a change re-selects all days automatically.
-- **Q2 Baselines.** Loveland airport id unconfirmed (replaces USC00053005); elevation fit for USW00024144 and USW00024022 unconfirmed; ACIS accepting GHCN ids as `sid` assumed; percentile-year eligibility is 02's.
+- **Q1 (Closed, Oct 7)** GDD is configurable and computed at query time by the API; the poller computes none.
+- **Q2 Baselines.** Loveland is FNL, `USW00094035` (replaces USC00053005; record from 2011-10-01, confirmed through ACIS on Oct 7, 2026); elevation fit for USW00024144 (3,865 ft) and USW00024022 (7,273 ft) still unchecked against the owners' stations; ACIS accepts GHCN ids as `sid` (confirmed); percentile-year eligibility is 02's.
 - **Q3 Thresholds are proposals** (all constants in code): 0.5 in per 5 min and 4.0 in absolute caps, the glitch rule (drop of at least 0.05 in returning within 6 readings), reconcile tolerance max(0.05 in, 10%), coverage 0.5/0.9, temperature bounds [-60, 130] F. Rodney to confirm after the first backfill using the reset/glitch/capped/mismatch counts.
 - **Q4 Console time zone.** Reconciliation assumes the console clock uses `stations.timezone` with DST; otherwise `mismatch` fires daily.
 - **Q5 New devices.** Unknown MACs are reported, not auto-created. Auto-create wanted? The possible Mesa, AZ station on the Laramie owner's account would appear as an unknown device and needs a baseline before enabling.
 - **Q6 Bad application key response and lone credentials.** 401 vs 403 for a bad application key is unverified (Apiary page not retrievable); verify at T7. Under the conventions' rule a credential is marked `invalid` only if another credential succeeded in the same run, so a lone revoked key fails the job (and alerts) but is never marked invalid until a second credential exists.
-- **Q7 Forecast models and volume.** Two models proposed (`ecmwf_ifs025`, `gfs025` at 10 days); all strings, member counts and `max_lead_hours` unverified until T9 confirms them against a recorded response; volume about 0.5 M rows/yr versus F1.
-- **Q9 F2 archive research.** Verified: the Previous Runs API covers regular forecast models from about January 2024 with `previous_dayN` offsets; the metadata API exists. Not verified: any ensemble archive, or reconstructing run history. Until resolved, snapshots start the day the production poller is live. After go-live, test `previous-runs-api` and any historical-forecast API for the three locations and record results here.
+- **Q7, Q9 (closed, Oct 7).** Forecast storage is dropped (proposals/06, option A); the Previous Runs archive was checked with curl on 2026-10-07 and its results are in proposals/06 and 02 section 5.6. Nothing forecast-related is open in the poller.
 - **Q10 AWN history depth, `endDate` inclusivity, 288 limit, 5- versus 30-minute interval.** Confirm at T7; backfill records `earliest_ts`.
 - **Q11 `snow` from ACIS** is not stored.
 - **Q12 Replay data is shifted once at process start**; no new readings appear later (acceptable for local dev).
-- **Assumptions.** Airport GHCN-Daily days are midnight-to-midnight local standard time (F5). ACIS and Open-Meteo free access stay keyless at this volume.
+- **Assumptions.** Airport GHCN-Daily days are midnight-to-midnight local standard time (F5). ACIS free access stays keyless at this volume.
