@@ -1,0 +1,63 @@
+[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "api"
+path = "src/main.rs"
+
+[[example]]
+name = "record_openmeteo"
+path = "examples/record_openmeteo.rs"
+
+[features]
+default = []
+# Test-only constructors and routes (ApiConfig::for_test, extra test routers, ...). Never enabled by a release build.
+test-support = ["famweather-core/test-support"]
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+# `api` never enables `decrypt` (S5): the binary can encrypt credentials but never read them.
+famweather-core.workspace = true
+futures.workspace = true
+governor.workspace = true
+jsonwebtoken.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
+# gzip and deflate: Open-Meteo requests send `Accept-Encoding: gzip, deflate` and `chunk()` yields decoded bytes (4 MiB cap).
+reqwest = { workspace = true, features = ["gzip", "deflate"] }
+secrecy = { workspace = true, features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+api = { path = ".", features = ["test-support"] }
+famweather-core = { workspace = true, features = ["test-support", "testdb"] }
+flate2.workspace = true
+http-body-util = "0.1"
+p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+rand_core = { package = "rand_core", version = "0.6", features = ["getrandom"] }
+rsa = "0.9"
+tempfile.workspace = true
+toml.workspace = true
+wiremock.workspace = true

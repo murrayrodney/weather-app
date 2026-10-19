@@ -1,0 +1,47 @@
+{
+	admin off
+	auto_https off
+}
+
+:80 {
+	encode zstd gzip
+	header -Server
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle /api/* {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy api:8080
+	}
+
+	# GoTrue serves at /, clients call /auth/v1/*; handle_path strips the prefix.
+	handle_path /auth/v1/* {
+		reverse_proxy auth:9999
+	}
+
+	# Build assets: never fall back to the SPA page, so a missing chunk is a real 404.
+	handle /_app/* {
+		root * /srv/webroot/build
+		import /etc/caddy/security-headers.caddy
+		@immutable path /_app/immutable/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		@mutable not path /_app/immutable/*
+		header @mutable Cache-Control "no-cache"
+		file_server
+	}
+
+	handle {
+		root * /srv/webroot/build
+		import /etc/caddy/security-headers.caddy
+		header Cache-Control "no-cache"
+		# GET / has no file named "/" to fall back from; rewrite it explicitly.
+		@root path /
+		rewrite @root /200.html
+		try_files {path} /200.html
+		file_server
+	}
+}
