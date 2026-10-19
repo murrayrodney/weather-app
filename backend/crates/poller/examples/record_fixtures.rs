@@ -206,8 +206,6 @@ fn synth_all(cli: &Cli) -> Result<()> {
     spec.base_temp_f = 50.0;
     spec.anomalies = Anomalies {
         reset_at_day: Some(20.0),
-        glitch_at_day: Some(35.0),
-        spike_at_day: Some(50.0),
     };
     let base = synth::generate(&spec);
     write(cli, "AA:BB:CC:00:00:01", &base)?;

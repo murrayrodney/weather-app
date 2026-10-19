@@ -470,7 +470,7 @@ Final names (this is the authoritative list; 03's 7.1 must match). All sensor co
 | `battout` | `battery_out` | smallint |
 | (derived by `daily_rollup`, not by ingest) | `rain_inc_in` | numeric(6,3) |
 
-`rain_inc_in` is the per-interval rain increment after reset handling and jump capping (F6). It is recomputed by the rollup (so a late row fixes its neighbours) and `daily_rollups.rain_in = sum(rain_inc_in)`. Ingest upserts must not touch it. Not stored: `24hourrainin`, `tz`, `macAddress`, extra sensors, `battin`, raw JSON (C4). Adding a sensor is a migration plus a row in 03's mapping table.
+`rain_inc_in` is the per-interval rain increment: the plain difference to the previous reading, or the new value after a reset to near zero (F6; 03 section 7.3). It is recomputed by the rollup (so a late row fixes its neighbours) and `daily_rollups.rain_in = sum(rain_inc_in)`. Ingest upserts must not touch it. Not stored: `24hourrainin`, `tz`, `macAddress`, extra sensors, `battin`, raw JSON (C4). Adding a sensor is a migration plus a row in 03's mapping table.
 
 ```sql
 CREATE TABLE app.observations (
@@ -525,8 +525,8 @@ CREATE TABLE app.daily_rollups (
   tmin_f            real,
   obs_count         smallint NOT NULL DEFAULT 0 CHECK (obs_count >= 0),   -- readings with temp_f (288 at 5 min, 48 at 30 min when complete)
   is_complete       boolean NOT NULL DEFAULT false,    -- true only for a finished day with coverage >= 0.9 (interval-aware, below)
-  rain_resets       smallint NOT NULL DEFAULT 0,        -- counter drops treated as resets (F6)
-  rain_capped       smallint NOT NULL DEFAULT 0,        -- impossible jumps capped (F6)
+  rain_resets       smallint NOT NULL DEFAULT 0,        -- counter drops to near zero, treated as resets (F6)
+  rain_capped       smallint NOT NULL DEFAULT 0,        -- UNUSED since Oct 18, 2026 (the cap rule was removed; always 0)
   awn_daily_rain_in numeric(7,3),                       -- AWN's own daily total used for reconciliation
   rain_reconcile_status text NOT NULL DEFAULT 'unchecked'
                     CHECK (rain_reconcile_status IN ('unchecked','ok','mismatch','no_awn_total')),

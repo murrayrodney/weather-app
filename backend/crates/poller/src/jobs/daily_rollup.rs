@@ -36,8 +36,6 @@ pub struct RollupDetail {
     pub days_processed: u32,
     pub days_changed: u32,
     pub resets: u32,
-    pub capped: u32,
-    pub rain_glitches: u32,
     pub mismatches: u32,
     pub temp_outliers: u32,
     pub self_healed: bool,
@@ -67,8 +65,6 @@ pub struct DayResult {
     pub interval_min: i64,
     pub rain_in: Option<f64>,
     pub resets: u32,
-    pub capped: u32,
-    pub glitch_events: u32,
     pub temp_outliers: u32,
 }
 
@@ -141,7 +137,7 @@ pub fn compute_day(
     let contains_now = day_start <= now && now < day_end;
     let (obs_count, tmax_f, tmin_f, is_complete, coverage, interval_min, temp_outliers) =
         temperature_part(&day, contains_now);
-    let (mut rain_in, mut resets, mut capped, mut glitch_events) = (None, 0, 0, 0);
+    let (mut rain_in, mut resets) = (None, 0);
     if let Some(incs) = incs {
         let slice = &incs[lo..hi];
         let sum: f64 = slice.iter().filter_map(|i| i.inc).sum();
@@ -149,14 +145,6 @@ pub fn compute_day(
             rain_in = Some(rain::round3(sum));
         }
         resets = slice.iter().filter(|i| i.reset).count() as u32;
-        capped = slice.iter().filter(|i| i.capped).count() as u32;
-        let mut prev_glitch = false;
-        for i in slice {
-            if i.glitch && !prev_glitch {
-                glitch_events += 1;
-            }
-            prev_glitch = i.glitch;
-        }
     }
     Some(DayResult {
         obs_count,
@@ -167,8 +155,6 @@ pub fn compute_day(
         interval_min,
         rain_in,
         resets,
-        capped,
-        glitch_events,
         temp_outliers,
     })
 }
@@ -177,7 +163,7 @@ pub fn compute_day(
 // Month series cache
 
 struct MonthSeries {
-    /// Predecessor row (if any), the month's rows, then up to GLITCH_LOOKAHEAD_READINGS rows after the month.
+    /// The one predecessor row (if any, needed for the first difference), then the month's rows.
     rows: Vec<SeriesRow>,
     /// Increments over `rows` with the counter chosen from the month's own rows (`None`: no usable counter).
     incs: Option<Vec<Inc>>,
@@ -241,38 +227,19 @@ async fn load_month(
     off: i32,
 ) -> Result<MonthSeries, sqlx::Error> {
     let (start, end) = month_bounds(off, key.first);
-    // Look-back mirrors the look-ahead: a glitch that starts before the month and recovers inside it starts at most
-    // GLITCH_LOOKAHEAD_READINGS rows before the recovery, and its last good reading is one row earlier still. So
-    // GLITCH_LOOKAHEAD_READINGS + 1 predecessors make this month agree with the previous month's look-ahead.
+    // One predecessor row: the first difference of the month needs the previous reading.
     let pred_rows = sqlx::query(&format!(
-        "SELECT {SERIES_COLS} FROM app.observations WHERE station_id = $1 AND ts_utc < $2 ORDER BY ts_utc DESC LIMIT {}",
-        rain::consts::GLITCH_LOOKAHEAD_READINGS + 1
+        "SELECT {SERIES_COLS} FROM app.observations WHERE station_id = $1 AND ts_utc < $2 ORDER BY ts_utc DESC LIMIT 1"
     ))
     .bind(key.station)
     .bind(start)
     .fetch_all(&mut *conn)
     .await?;
-    let mut pred: Vec<SeriesRow> = pred_rows.iter().map(series_row).collect::<Result<_, _>>()?;
-    pred.reverse();
-    let ahead_rows = sqlx::query(&format!(
-        "SELECT {SERIES_COLS} FROM app.observations WHERE station_id = $1 AND ts_utc >= $2 ORDER BY ts_utc LIMIT {}",
-        rain::consts::GLITCH_LOOKAHEAD_READINGS
-    ))
-    .bind(key.station)
-    .bind(end)
-    .fetch_all(&mut *conn)
-    .await?;
-    let ahead: Vec<SeriesRow> = ahead_rows
-        .iter()
-        .map(series_row)
-        .collect::<Result<_, _>>()?;
+    let pred: Vec<SeriesRow> = pred_rows.iter().map(series_row).collect::<Result<_, _>>()?;
     let lo = pred.first().map_or(start, |p| p.ts);
-    let hi = if ahead.len() == rain::consts::GLITCH_LOOKAHEAD_READINGS {
-        ahead.last().map(|r| r.ts)
-    } else {
-        None
-    };
-    let span = (lo, hi);
+    // The month's result depends only on the predecessor and the month's own rows (the bound at `end` is inclusive,
+    // which only ever over-detects a change).
+    let span = (lo, Some(end));
     let fp = fingerprint(&mut *conn, key.station, span).await?;
     let month_rows = sqlx::query(&format!(
         "SELECT {SERIES_COLS} FROM app.observations WHERE station_id = $1 AND ts_utc >= $2 AND ts_utc < $3 ORDER BY ts_utc"
@@ -289,10 +256,9 @@ async fn load_month(
 
     let counters: Vec<Counters> = month.iter().map(|r| r.counters).collect();
     let counter = choose_counter(&counters);
-    let mut rows = Vec::with_capacity(month.len() + 7);
+    let mut rows = Vec::with_capacity(month.len() + 1);
     rows.extend(pred);
     rows.extend(month);
-    rows.extend(ahead);
     let incs = counter.map(|c| {
         let rr: Vec<RainRow> = rows
             .iter()
@@ -321,7 +287,6 @@ fn retryable(e: &sqlx::Error) -> bool {
 struct DayOutcome {
     result: Option<DayResult>,
     changed: bool,
-    capped_ts: Vec<DateTime<Utc>>,
 }
 
 async fn process_day_once(
@@ -359,10 +324,9 @@ async fn process_day_once(
         return Ok(DayOutcome {
             result: None,
             changed: false,
-            capped_ts: vec![],
         });
     };
-    // 2. rain_inc_in for the rows of this day only (the predecessor and look-ahead rows are read, never rewritten).
+    // 2. rain_inc_in for the rows of this day only (the predecessor row is read, never rewritten).
     let lo = month.rows.partition_point(|r| r.ts < day_start);
     let hi = month.rows.partition_point(|r| r.ts < day_end);
     let ts: Vec<DateTime<Utc>> = month.rows[lo..hi].iter().map(|r| r.ts).collect();
@@ -370,17 +334,6 @@ async fn process_day_once(
         Some(v) => v[lo..hi].iter().map(|i| i.inc).collect(),
         None => vec![None; hi - lo],
     };
-    let capped_ts: Vec<DateTime<Utc>> = month
-        .incs
-        .as_ref()
-        .map(|v| {
-            v[lo..hi]
-                .iter()
-                .filter(|i| i.capped)
-                .map(|i| i.ts)
-                .collect()
-        })
-        .unwrap_or_default();
     sqlx::query(
         "UPDATE app.observations o SET rain_inc_in = round(v.inc::numeric, 3) \
          FROM unnest($2::timestamptz[], $3::float8[]) AS v(ts, inc) \
@@ -394,17 +347,17 @@ async fn process_day_once(
     // 3. the rollup row (reconciliation is not implemented: status stays 'unchecked', the AWN columns NULL).
     let changed = sqlx::query(
         "INSERT INTO app.daily_rollups (station_id, local_date, rain_in, tmax_f, tmin_f, obs_count, is_complete, \
-           rain_resets, rain_capped, rain_reconcile_status, computed_at) \
-         VALUES ($1, $2, round($3::float8::numeric, 3), $4, $5, $6, $7, $8, $9, 'unchecked', now()) \
+           rain_resets, rain_reconcile_status, computed_at) \
+         VALUES ($1, $2, round($3::float8::numeric, 3), $4, $5, $6, $7, $8, 'unchecked', now()) \
          ON CONFLICT (station_id, local_date) DO UPDATE SET rain_in = EXCLUDED.rain_in, tmax_f = EXCLUDED.tmax_f, \
            tmin_f = EXCLUDED.tmin_f, obs_count = EXCLUDED.obs_count, is_complete = EXCLUDED.is_complete, \
-           rain_resets = EXCLUDED.rain_resets, rain_capped = EXCLUDED.rain_capped, \
+           rain_resets = EXCLUDED.rain_resets, \
            awn_daily_rain_in = NULL, rain_reconcile_status = 'unchecked', rain_reconcile_diff_in = NULL, computed_at = now() \
          WHERE (app.daily_rollups.rain_in, app.daily_rollups.tmax_f, app.daily_rollups.tmin_f, app.daily_rollups.obs_count, \
-                app.daily_rollups.is_complete, app.daily_rollups.rain_resets, app.daily_rollups.rain_capped, \
+                app.daily_rollups.is_complete, app.daily_rollups.rain_resets, \
                 app.daily_rollups.awn_daily_rain_in, app.daily_rollups.rain_reconcile_status, app.daily_rollups.rain_reconcile_diff_in) \
                IS DISTINCT FROM (EXCLUDED.rain_in, EXCLUDED.tmax_f, EXCLUDED.tmin_f, EXCLUDED.obs_count, EXCLUDED.is_complete, \
-                EXCLUDED.rain_resets, EXCLUDED.rain_capped, NULL::numeric, 'unchecked', NULL::numeric)",
+                EXCLUDED.rain_resets, NULL::numeric, 'unchecked', NULL::numeric)",
     )
     .bind(station)
     .bind(date)
@@ -414,7 +367,6 @@ async fn process_day_once(
     .bind(res.obs_count as i16)
     .bind(res.is_complete)
     .bind(res.resets as i16)
-    .bind(res.capped as i16)
     .execute(&mut *tx)
     .await?
     .rows_affected()
@@ -423,7 +375,6 @@ async fn process_day_once(
     Ok(DayOutcome {
         result: Some(res),
         changed,
-        capped_ts,
     })
 }
 
@@ -644,12 +595,7 @@ impl Job for DailyRollup {
                         d.days_processed += 1;
                         d.days_changed += u32::from(out.changed);
                         d.resets += r.resets;
-                        d.capped += r.capped;
-                        d.rain_glitches += r.glitch_events;
                         d.temp_outliers += r.temp_outliers;
-                    }
-                    for ts in out.capped_ts {
-                        tracing::warn!(station_id = %station, ts = %ts, "rain increment capped");
                     }
                 }
             }
@@ -763,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn rain_sums_only_the_days_rows_and_counts_events() {
+    fn rain_sums_only_the_days_rows_and_counts_resets() {
         let mut rows = readings(5, 288, |_| Some(60.0));
         // counter: 1.00 for the first 100 readings, then 1.10
         for (i, r) in rows.iter_mut().enumerate() {
@@ -780,7 +726,7 @@ mod tests {
         let (s, e) = (t0(), t0() + Duration::hours(24));
         let r = compute_day(&rows, Some(&incs), s, e, t0() + Duration::days(3)).unwrap();
         assert_eq!(r.rain_in, Some(0.1));
-        assert_eq!((r.resets, r.capped, r.glitch_events), (0, 0, 0));
+        assert_eq!(r.resets, 0);
         // no usable counter: NULL, not 0
         let none = compute_day(&rows, None, s, e, t0() + Duration::days(3)).unwrap();
         assert_eq!(none.rain_in, None);

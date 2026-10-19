@@ -152,7 +152,7 @@ pub fn dedupe_sorted(rows: Vec<MappedRow>) -> Vec<MappedRow> {
 }
 
 /// The standard dates a changed row dirties: its own day and, for rows shortly after a boundary, the previous day
-/// (the 4 h look-back covers the rain-glitch look-ahead and the console's wall-day window).
+/// (the 4 h look-back covers the console's wall-day window).
 pub fn dirty_dates(off_minutes: i32, changed: &[DateTime<Utc>]) -> BTreeSet<NaiveDate> {
     let mut days = BTreeSet::new();
     for ts in changed {

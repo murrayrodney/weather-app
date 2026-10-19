@@ -31,9 +31,9 @@ replay is `Unauthorized`. Replay shifts all timestamps once at process start so 
 ## The synthetic stations
 
 `:01` is generated; `:02` and `:03` are derived from it (temperatures shifted, rain counters scaled, timestamps kept)
-so each keeps its own counters. The base series contains, at fixed offsets from its start, a console counter **reset**
-(day 20), a counter **glitch** (three low readings, day 35) and an impossible **jump** that gets capped (day 50), so
-the rollup exercises `rain_resets`, `rain_glitches` and `rain_capped`.
+so each keeps its own counters. The base series contains, at a fixed offset from its start, one console counter
+**reset** (day 20, the total drops to zero and counts on), so the rollup exercises `rain_resets`. There are no injected
+glitches or jumps: the rain rules are plain differences plus reset to near zero.
 
 Regenerate everything (deterministic):
 

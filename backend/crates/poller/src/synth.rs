@@ -35,10 +35,6 @@ impl Rng {
 pub struct Anomalies {
     /// The console total drops to zero and counts on (a counter reset).
     pub reset_at_day: Option<f64>,
-    /// Three readings with a low total, then back (a glitch).
-    pub glitch_at_day: Option<f64>,
-    /// A single jump of 2 inches that stays (an impossible jump that is capped).
-    pub spike_at_day: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,12 +106,9 @@ fn generate_oldest_first(spec: &StationSpec) -> Vec<Value> {
 
     let day_idx = |d: f64| (d * (24 * 60 / spec.interval_min) as f64) as usize;
     let reset_at = spec.anomalies.reset_at_day.map(day_idx);
-    let glitch_at = spec.anomalies.glitch_at_day.map(day_idx);
-    let spike_at = spec.anomalies.spike_at_day.map(day_idx);
 
     let mut cum = 0.0f64; // fractional inches since the start
     let mut reset_sub = 0.0f64;
-    let mut spike_add = 0.0f64;
     let (mut origin_day, mut origin_week, mut origin_month, mut origin_year) = (0.0, 0.0, 0.0, 0.0);
     let mut prev_date = local_date(start, spec.std_offset_min);
     let mut last_rain: Option<DateTime<Utc>> = None;
@@ -149,9 +142,6 @@ fn generate_oldest_first(spec: &StationSpec) -> Vec<Value> {
         if reset_at == Some(i) {
             reset_sub = 41.0 + cum;
         }
-        if spike_at == Some(i) {
-            spike_add = 2.0;
-        }
 
         let hour = f64::from(local.hour()) + f64::from(local.minute()) / 60.0;
         let doy = f64::from(date.ordinal());
@@ -168,13 +158,7 @@ fn generate_oldest_first(spec: &StationSpec) -> Vec<Value> {
         let dew = temp - (100.0 - hum) / 5.0;
         let wind = (4.0 + 3.0 * rng.unit() + 2.0 * (1.0 + diurnal)).max(0.0);
         let gust = wind + rng.range(1.0, 7.0);
-        let total_disp = {
-            let mut t = 41.0 + cum - reset_sub + spike_add;
-            if glitch_at.is_some_and(|g| i >= g && i < g + 3) {
-                t = (t - 1.1).max(0.0);
-            }
-            r2(t.max(0.0))
-        };
+        let total_disp = r2((41.0 + cum - reset_sub).max(0.0));
         let solar = if (6.0..18.0).contains(&hour) {
             900.0 * ((hour - 6.0) / 12.0 * std::f64::consts::PI).sin()
         } else {
@@ -408,27 +392,20 @@ mod tests {
     }
 
     #[test]
-    fn anomalies_show_up_in_the_total_counter() {
+    fn the_reset_is_the_only_drop_in_the_total_counter() {
         let mut spec = StationSpec::simple(newest(), 20, 5, 3);
         spec.anomalies = Anomalies {
             reset_at_day: Some(5.0),
-            glitch_at_day: Some(10.0),
-            spike_at_day: Some(15.0),
         };
         let rows: Vec<f64> = generate_oldest_first(&spec)
             .iter()
             .map(|r| r["totalrainin"].as_f64().unwrap())
             .collect();
-        let drops = rows.windows(2).filter(|w| w[1] < w[0] - 0.05).count();
+        let drops: Vec<usize> = (1..rows.len()).filter(|&i| rows[i] < rows[i - 1]).collect();
+        assert_eq!(drops.len(), 1, "only the reset drops the counter");
+        assert!(rows[drops[0]] < 0.05, "and it drops to near zero");
         let jumps = rows.windows(2).filter(|w| w[1] > w[0] + 1.5).count();
-        assert!(
-            drops >= 2,
-            "reset and glitch both drop the counter: {drops}"
-        );
-        assert_eq!(
-            jumps, 1,
-            "exactly the spike: the glitch recovers by about 1.1 only"
-        );
+        assert_eq!(jumps, 0, "no injected jumps");
     }
 
     #[test]

@@ -1,18 +1,16 @@
 //! Rain increments from cumulative counters (F6, 03 section 7.3). Pure functions, no I/O.
 //!
 //! The console reports cumulative counters (`totalrainin`, `yearlyrainin`, `dailyrainin`). The increment of a
-//! reading is the difference to the previous reading, with three corrections: counter resets (the counter drops
-//! and stays low), glitches (a short dip that recovers), and impossible jumps (capped).
+//! reading is the plain difference to the previous reading. The one exception is a counter reset: when the counter
+//! drops to near zero (below [`consts::RESET_NEAR_ZERO_IN`]) the new value counts as rain from zero and the drop
+//! itself is not counted. Nothing else (Rodney, Oct 18, 2026).
 
 use chrono::{DateTime, Utc};
 
 /// Thresholds (all proposals, Q3).
 pub mod consts {
-    pub const MAX_INC_PER_5MIN_IN: f64 = 0.5;
-    pub const MAX_INC_ABS_IN: f64 = 4.0;
-    pub const GLITCH_MIN_DROP_IN: f64 = 0.05;
-    pub const GLITCH_LOOKAHEAD_READINGS: usize = 6;
-    pub const NOISE_IN: f64 = 0.0005;
+    /// A counter that drops to a value below this is a reset (the new value counts as rain from zero).
+    pub const RESET_NEAR_ZERO_IN: f64 = 0.05;
     pub const RECON_ABS_IN: f64 = 0.05;
     pub const RECON_REL: f64 = 0.10;
     /// A counter must be non-null in at least this share of a month's rows to be chosen.
@@ -78,89 +76,37 @@ pub struct Inc {
     /// `None` when the pair has no usable predecessor value.
     pub inc: Option<f64>,
     pub reset: bool,
-    pub glitch: bool,
-    pub capped: bool,
 }
 
 pub fn round3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
 }
 
-fn cap_for(gap: chrono::Duration) -> f64 {
-    let five = chrono::Duration::minutes(5).num_milliseconds() as f64;
-    let steps = (gap.num_milliseconds().max(0) as f64 / five)
-        .ceil()
-        .max(1.0);
-    (MAX_INC_PER_5MIN_IN * steps).min(MAX_INC_ABS_IN)
-}
-
 /// Increments over a contiguous, time-ordered series using the already chosen counter.
-/// A pair contributes only when both rows have a counter value.
+/// A pair contributes only when both rows have a counter value. The increment is `cur - prev`; a drop to a value
+/// below `RESET_NEAR_ZERO_IN` is a reset and yields `cur` (rain from zero).
 pub fn increments(rows: &[RainRow]) -> Vec<Inc> {
-    let n = rows.len();
     let mut out: Vec<Inc> = rows
         .iter()
         .map(|r| Inc {
             ts: r.ts,
             inc: None,
             reset: false,
-            glitch: false,
-            capped: false,
         })
         .collect();
-    let val = |i: usize| rows[i].counter.map(round3);
-    let mut i = 1;
-    while i < n {
-        let (Some(prev), Some(cur)) = (val(i - 1), val(i)) else {
-            i += 1;
+    for (pair, item) in rows.windows(2).zip(out.iter_mut().skip(1)) {
+        let (Some(prev), Some(cur)) = (pair[0].counter.map(round3), pair[1].counter.map(round3))
+        else {
             continue;
         };
-        let d = round3(cur - prev);
-        let gap = rows[i].ts - rows[i - 1].ts;
-        if d.abs() < NOISE_IN {
-            out[i].inc = Some(0.0);
-        } else if d >= 0.0 {
-            out[i].inc = Some(d);
-            apply_cap(&mut out[i], gap);
+        if cur < prev && cur < RESET_NEAR_ZERO_IN {
+            item.inc = Some(cur);
+            item.reset = true;
         } else {
-            // Counter dropped.
-            let glitch_end = if -d >= GLITCH_MIN_DROP_IN {
-                (i + 1..n.min(i + 1 + GLITCH_LOOKAHEAD_READINGS))
-                    .find(|&j| val(j).is_some_and(|c| c >= prev - NOISE_IN))
-            } else {
-                None
-            };
-            if let Some(j) = glitch_end {
-                for item in out.iter_mut().take(j).skip(i) {
-                    item.inc = Some(0.0);
-                    item.glitch = true;
-                }
-                let cj = val(j).expect("checked above");
-                out[j].inc = Some(round3((cj - prev).max(0.0)));
-                // The recovery row carries `c_j - c_{i-1}`, a difference over the whole glitch, so the cap is
-                // measured over the same span (03 7.3 defines the gap per pair; this is the reading that keeps
-                // real rain that fell during a glitch).
-                let span = rows[j].ts - rows[i - 1].ts;
-                apply_cap(&mut out[j], span);
-                i = j + 1;
-                continue;
-            }
-            out[i].inc = Some(cur.max(0.0));
-            out[i].reset = true;
-            apply_cap(&mut out[i], gap);
+            item.inc = Some(round3(cur - prev));
         }
-        i += 1;
     }
     out
-}
-
-fn apply_cap(item: &mut Inc, gap: chrono::Duration) {
-    if let Some(v) = item.inc {
-        if v > cap_for(gap) {
-            item.inc = Some(0.0);
-            item.capped = true;
-        }
-    }
 }
 
 /// Reconciliation status strings of `daily_rollups.rain_reconcile_status`.
@@ -224,76 +170,83 @@ mod tests {
     }
 
     #[test]
-    fn glitch_that_recovers_is_not_rain_and_not_a_reset() {
-        let r = increments(&s(&[1.20, 0.30, 1.20]));
-        let v: Vec<_> = r.iter().map(|i| i.inc).collect();
-        assert_eq!(v, [None, Some(0.0), Some(0.0)]);
-        assert!(r[1].glitch && !r.iter().any(|i| i.reset));
+    fn plain_differences_with_no_other_rule() {
+        // Large jumps and tiny steps are taken as they are (no cap, no noise rule).
+        assert_eq!(
+            incs(&s(&[0.0, 5.0, 5.0004, 5.0014])),
+            [None, Some(5.0), Some(0.0), Some(0.001)]
+        );
+        let r = increments(&s(&[0.0, 0.6, 1.0]));
+        assert!(!r.iter().any(|i| i.reset));
+        assert_eq!(r[1].inc, Some(0.6));
     }
 
     #[test]
-    fn glitch_that_recovers_higher_counts_the_difference() {
-        assert_eq!(incs(&s(&[1.20, 0.30, 1.25])), [None, Some(0.0), Some(0.05)]);
-    }
-
-    #[test]
-    fn rain_that_fell_during_a_glitch_is_capped_against_the_whole_span() {
-        // 0.6 in over 15 minutes (three 5-minute steps): within the 1.5 in cap of the span, not zeroed.
-        let r = increments(&s(&[1.00, 0.30, 0.30, 1.60]));
-        assert_eq!(r[3].inc, Some(0.6));
-        assert!(!r[3].capped && r[1].glitch && r[2].glitch);
-        // Still capped when it exceeds the span's cap.
-        let r = increments(&s(&[1.00, 0.30, 0.30, 3.00]));
-        assert!(r[3].capped && r[3].inc == Some(0.0));
-    }
-
-    #[test]
-    fn small_drop_is_a_reset() {
-        let r = increments(&s(&[1.00, 0.97, 0.97]));
-        assert!(r[1].reset, "{r:?}");
-    }
-
-    #[test]
-    fn drop_that_never_returns_within_six_readings_is_a_reset() {
-        // 7 low readings then recovery: lookahead of 6 does not see it.
-        let mut vals = vec![1.20];
-        vals.extend([0.30; 7]);
-        vals.push(1.20);
-        let r = increments(&s(&vals));
-        assert!(r[1].reset && !r[1].glitch);
-        // Recovery within 6 readings is a glitch.
-        let mut vals = vec![1.20];
-        vals.extend([0.30; 5]);
-        vals.push(1.20);
-        let r = increments(&s(&vals));
-        assert!(r[1].glitch && !r[1].reset, "{r:?}");
-    }
-
-    #[test]
-    fn jumps_are_capped() {
-        let r = increments(&s(&[0.0, 5.0]));
+    fn drop_to_near_zero_is_a_reset_and_the_new_value_counts() {
+        // Below the threshold: reset.
+        let r = increments(&s(&[3.00, 0.04, 0.10]));
+        assert_eq!(
+            r.iter().map(|i| i.inc).collect::<Vec<_>>(),
+            [None, Some(0.04), Some(0.06)]
+        );
+        assert!(!r[0].reset && r[1].reset && !r[2].reset);
+        // Exactly zero.
+        let r = increments(&s(&[0.20, 0.0]));
         assert_eq!(r[1].inc, Some(0.0));
-        assert!(r[1].capped);
-        let r = increments(&s(&[0.0, 0.6]));
-        assert!(r[1].capped);
-        let r = increments(&s(&[0.0, 0.5]));
-        assert!(!r[1].capped && r[1].inc == Some(0.5));
-        // 4.0 in over a 4 h gap: cap min(0.5 * 48, 4.0) = 4.0, accepted.
-        let r = increments(&series(&[Some(0.0), Some(4.0)], 240));
-        assert!(!r[1].capped && r[1].inc == Some(4.0));
-        let r = increments(&series(&[Some(0.0), Some(4.5)], 240));
-        assert!(r[1].capped);
+        assert!(r[1].reset);
+        // At the threshold itself it is not near zero: plain (negative) difference, not a reset.
+        let r = increments(&s(&[1.00, RESET_NEAR_ZERO_IN]));
+        assert!(!r[1].reset);
+        assert_eq!(r[1].inc, Some(round3(RESET_NEAR_ZERO_IN - 1.0)));
+    }
+
+    #[test]
+    fn reset_across_a_day_and_a_month_boundary() {
+        // One series spanning 30 Jun 23:40 -> 1 Jul 00:10 in 10-minute steps; the reset lands on each boundary.
+        let t0 = Utc.with_ymd_and_hms(2026, 6, 30, 23, 40, 0).unwrap();
+        let mk = |vals: &[f64]| -> Vec<RainRow> {
+            vals.iter()
+                .enumerate()
+                .map(|(i, v)| RainRow {
+                    ts: t0 + Duration::minutes(10 * i as i64),
+                    counter: Some(*v),
+                })
+                .collect()
+        };
+        // reset exactly at the boundary row (00:00)
+        let r = increments(&mk(&[2.00, 2.10, 0.00, 0.02]));
+        assert_eq!(
+            r.iter().map(|i| i.inc).collect::<Vec<_>>(),
+            [None, Some(0.10), Some(0.0), Some(0.02)]
+        );
+        assert!(r[2].reset);
+        assert_eq!(r[2].ts, Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap());
+        // reset one row before the boundary, with rain after it
+        let r = increments(&mk(&[2.00, 0.03, 0.05, 0.09]));
+        assert_eq!(
+            r.iter().map(|i| i.inc).collect::<Vec<_>>(),
+            [None, Some(0.03), Some(0.02), Some(0.04)]
+        );
+        assert!(r[1].reset && !r[2].reset);
+    }
+
+    #[test]
+    fn season_total_is_last_minus_first_without_resets() {
+        let vals = [0.00, 0.00, 0.01, 0.25, 0.25, 1.10, 1.11, 3.40, 3.40, 7.125];
+        let r = increments(&s(&vals));
+        assert!(!r.iter().any(|i| i.reset));
+        let total: f64 = r.iter().filter_map(|i| i.inc).sum();
+        assert_eq!(round3(total), round3(vals[vals.len() - 1] - vals[0]));
+        // Same with a non-zero start.
+        let vals = [12.34, 12.34, 12.50, 13.00];
+        let total: f64 = increments(&s(&vals)).iter().filter_map(|i| i.inc).sum();
+        assert_eq!(round3(total), 0.66);
     }
 
     #[test]
     fn null_ends_give_null() {
         let r = incs(&series(&[None, Some(1.0), Some(1.1), None, Some(1.2)], 5));
         assert_eq!(r, [None, None, Some(0.1), None, None]);
-    }
-
-    #[test]
-    fn noise_is_ignored() {
-        assert_eq!(incs(&s(&[1.0, 1.0004, 1.0])), [None, Some(0.0), Some(0.0)]);
     }
 
     #[test]

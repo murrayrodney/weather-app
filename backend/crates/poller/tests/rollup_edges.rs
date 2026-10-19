@@ -1,4 +1,4 @@
-//! Regression tests from the step 3 review: glitches across day and month boundaries, the ingest-first interleaving,
+//! Regression tests from the step 3 review: resets across day and month boundaries, the ingest-first interleaving,
 //! SQL/Rust day agreement, the once-per-process offset warning, backfill credential bookkeeping, bounded run ids.
 
 mod common;
@@ -43,8 +43,9 @@ fn reading(ts: DateTime<Utc>, total: f32) -> MappedRow {
     }
 }
 
-/// A 3-reading glitch (9.90 instead of 10.00) that starts 5 minutes before `boundary` and recovers 10 minutes after.
-async fn straddle(db: PgPool, boundary: DateTime<Utc>) {
+/// A counter reset to 0.00 at the reading `reset_k` steps (5 minutes) after `boundary`, then 0.04 in of rain from
+/// `k = 3` on. Returns nothing; asserts the two days' rain and resets.
+async fn straddle(db: PgPool, boundary: DateTime<Utc>, reset_k: i64) {
     let w = Builder::new(db)
         .clock_at(boundary + Dur::days(10))
         .build()
@@ -52,7 +53,13 @@ async fn straddle(db: PgPool, boundary: DateTime<Utc>) {
     let st = station(&w).await;
     let rows: Vec<MappedRow> = (-6..=6)
         .map(|k| {
-            let total = if (-1..=1).contains(&k) { 9.90 } else { 10.00 };
+            let total = if k < reset_k {
+                10.00
+            } else if k < 3 {
+                0.00
+            } else {
+                0.04
+            };
             reading(boundary + Dur::minutes(5 * k), total)
         })
         .collect();
@@ -69,10 +76,10 @@ async fn straddle(db: PgPool, boundary: DateTime<Utc>) {
     .await
     .unwrap();
     assert_eq!(days.len(), 2, "{days:?}");
-    for (date, rain, resets) in days {
-        assert_eq!(rain, Some(0.0), "{date}: a dip that recovers is not rain");
-        assert_eq!(resets, 0);
-    }
+    // The drop 10.00 -> 0.00 is never rain; the reset happens in the day that holds the 0.00 reading.
+    let (before, after) = if reset_k < 0 { (1, 0) } else { (0, 1) };
+    assert_eq!((days[0].1, days[0].2), (Some(0.0), before), "{days:?}");
+    assert_eq!((days[1].1, days[1].2), (Some(0.04), after), "{days:?}");
     let incs: Vec<Option<f64>> = sqlx::query_scalar(
         "SELECT rain_inc_in::float8 FROM app.observations WHERE station_id = $1 ORDER BY ts_utc",
     )
@@ -80,26 +87,38 @@ async fn straddle(db: PgPool, boundary: DateTime<Utc>) {
     .fetch_all(&w.db)
     .await
     .unwrap();
-    assert!(incs.iter().skip(1).all(|i| *i == Some(0.0)), "{incs:?}");
+    assert_eq!(
+        incs.iter().flatten().filter(|i| **i > 0.0).count(),
+        1,
+        "{incs:?}"
+    );
     w.close().await;
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_glitch_straddling_a_month_boundary_is_not_phantom_rain(db: PgPool) {
+async fn a_reset_on_the_first_reading_of_a_month_counts_from_zero(db: PgPool) {
     // 2026-06-01 00:00 local standard time (MST) is 07:00Z: the boundary between May and June.
-    straddle(db, Utc.with_ymd_and_hms(2026, 6, 1, 7, 0, 0).unwrap()).await;
+    straddle(db, Utc.with_ymd_and_hms(2026, 6, 1, 7, 0, 0).unwrap(), 0).await;
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_glitch_straddling_a_day_boundary_is_not_phantom_rain(db: PgPool) {
-    straddle(db, Utc.with_ymd_and_hms(2026, 6, 10, 7, 0, 0).unwrap()).await;
+async fn a_reset_on_the_last_reading_of_a_month_counts_from_zero(db: PgPool) {
+    straddle(db, Utc.with_ymd_and_hms(2026, 6, 1, 7, 0, 0).unwrap(), -1).await;
 }
 
 #[sqlx::test(migrations = false)]
-async fn the_previous_months_lookahead_and_the_next_months_lookback_agree_on_every_boundary_row(
-    db: PgPool,
-) {
-    // Process each month on its own (only that month queued) and compare with processing both together.
+async fn a_reset_on_the_first_reading_of_a_day_counts_from_zero(db: PgPool) {
+    straddle(db, Utc.with_ymd_and_hms(2026, 6, 10, 7, 0, 0).unwrap(), 0).await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_reset_on_the_last_reading_of_a_day_counts_from_zero(db: PgPool) {
+    straddle(db, Utc.with_ymd_and_hms(2026, 6, 10, 7, 0, 0).unwrap(), -1).await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn each_month_processed_alone_uses_the_one_predecessor_row_across_the_boundary(db: PgPool) {
+    // Process each month on its own (only that month queued): the first June difference needs the last May row.
     let boundary = Utc.with_ymd_and_hms(2026, 6, 1, 7, 0, 0).unwrap();
     let w = Builder::new(db)
         .clock_at(boundary + Dur::days(10))
@@ -108,11 +127,11 @@ async fn the_previous_months_lookahead_and_the_next_months_lookback_agree_on_eve
     let st = station(&w).await;
     let rows: Vec<MappedRow> = (-8..=8)
         .map(|k| {
-            // glitch on k = -3..=2 (six low readings, the longest the rule accepts), real rain 0.04 at k = 5
+            // plain counter 10.00 in May; reset to 0.00 on the first June reading; real rain 0.04 at k = 5
             let total = match k {
-                -3..=2 => 9.50,
-                5.. => 10.04,
-                _ => 10.00,
+                ..=-1 => 10.00,
+                5.. => 0.04,
+                _ => 0.00,
             };
             reading(boundary + Dur::minutes(5 * k), total)
         })
@@ -152,8 +171,16 @@ async fn the_previous_months_lookahead_and_the_next_months_lookback_agree_on_eve
     .fetch_all(&w.db)
     .await
     .unwrap();
-    // The May-side rows were written by the May run (with look-ahead), the June-side by the June run (with
-    // look-back): together they are one consistent series, with exactly the 0.04 of real rain.
+    // The May-side rows were written by the May run, the June-side by the June run (which read the last May row
+    // as its predecessor, so the reset on the first June reading is seen): one consistent series, exactly 0.04 in.
+    let june_resets: i16 = sqlx::query_scalar(
+        "SELECT rain_resets FROM app.daily_rollups WHERE station_id = $1 AND local_date = '2026-06-01'",
+    )
+    .bind(st)
+    .fetch_one(&w.db)
+    .await
+    .unwrap();
+    assert_eq!(june_resets, 1);
     let all: Vec<f64> = may
         .iter()
         .chain(june.iter())

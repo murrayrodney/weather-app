@@ -300,7 +300,7 @@ async fn the_post_backfill_rollup_waits_for_a_held_lock_then_runs_and_gives_up_a
 // daily_rollup
 
 #[sqlx::test(migrations = false)]
-async fn rollups_after_backfill_cover_current_data_with_resets_glitches_and_caps(db: PgPool) {
+async fn rollups_after_backfill_cover_current_data_with_one_reset_per_station(db: PgPool) {
     let w = Builder::new(db).build().await;
     let seeded = w.seeded().await;
     let out = run(&w, JobName::AwnBackfill, None, JobFlags::default()).await;
@@ -324,9 +324,9 @@ async fn rollups_after_backfill_cover_current_data_with_resets_glitches_and_caps
         assert!(!today_complete);
         let (cnt, complete): (i16, bool) = sqlx::query_as("SELECT obs_count, is_complete FROM app.daily_rollups WHERE station_id = $1 AND local_date = '2026-10-01'").bind(st).fetch_one(&w.db).await.unwrap();
         assert_eq!((cnt, complete), (288, true));
-        // The base series carries one reset, one glitch and one capped jump (scaled copies keep them).
+        // The base series carries one reset (scaled copies keep it); nothing else is detected.
         let (resets, capped): (i64, i64) = sqlx::query_as("SELECT sum(rain_resets), sum(rain_capped) FROM app.daily_rollups WHERE station_id = $1").bind(st).fetch_one(&w.db).await.unwrap();
-        assert_eq!((resets, capped), (1, 1), "station {st}");
+        assert_eq!((resets, capped), (1, 0), "station {st}");
         let rain: Option<f64> = sqlx::query_scalar(
             "SELECT sum(rain_in)::float8 FROM app.daily_rollups WHERE station_id = $1",
         )
@@ -337,9 +337,8 @@ async fn rollups_after_backfill_cover_current_data_with_resets_glitches_and_caps
         assert!(rain.unwrap() > 0.5, "rain accumulates: {rain:?}");
     }
     let rollup: Value = sqlx::query_scalar("SELECT detail FROM app.job_runs WHERE job = 'daily_rollup' ORDER BY started_at DESC LIMIT 1").fetch_one(&w.db).await.unwrap();
-    assert_eq!(rollup["rain_glitches"], 3, "{rollup}");
-    assert_eq!(rollup["resets"], 3);
-    assert_eq!(rollup["capped"], 3);
+    assert_eq!(rollup["resets"], 3, "{rollup}");
+    assert!(rollup.get("capped").is_none() && rollup.get("rain_glitches").is_none());
     w.close().await;
 }
 
@@ -521,7 +520,7 @@ async fn put(w: &World, st: Uuid, rows: Vec<MappedRow>) {
 }
 
 #[sqlx::test(migrations = false)]
-async fn rain_from_counters_with_a_reset_a_glitch_and_a_capped_jump(db: PgPool) {
+async fn rain_from_counters_is_plain_differences_with_a_reset_to_near_zero(db: PgPool) {
     let w = Builder::new(db)
         .clock_at(Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap())
         .build()
@@ -530,9 +529,10 @@ async fn rain_from_counters_with_a_reset_a_glitch_and_a_capped_jump(db: PgPool) 
     let cred = w.add_credential(owner, common::POLLER_KEY).await;
     let st = w.add_station(owner, cred, "AA:BB:CC:00:00:01").await;
     // 17 readings, 5 minutes apart from 08:00Z on 2026-06-02 (the standard day starts at 07:00Z).
+    // One reset (10.05 -> 0.00), then a large plain difference (0.03 -> 3.03) that is taken as it is.
     let totals = [
-        10.00, 10.01, 10.01, 10.02, 10.02, 9.00, 9.00, 10.03, 10.03, 10.04, 0.00, 0.02, 0.02, 0.03,
-        3.03, 3.03, 3.04,
+        10.00, 10.01, 10.01, 10.02, 10.02, 10.03, 10.03, 10.04, 10.04, 10.05, 0.00, 0.02, 0.02,
+        0.03, 3.03, 3.03, 3.04,
     ];
     let start = Utc.with_ymd_and_hms(2026, 6, 2, 8, 0, 0).unwrap();
     let rows: Vec<MappedRow> = totals
@@ -548,7 +548,7 @@ async fn rain_from_counters_with_a_reset_a_glitch_and_a_capped_jump(db: PgPool) 
     put(&w, st, rows).await;
     let out = run(&w, JobName::DailyRollup, None, JobFlags::default()).await;
     assert_eq!(status(&out), RunStatus::Success);
-    assert_eq!(detail(&out)["rain_glitches"], 1);
+    assert_eq!(detail(&out)["resets"], 1);
     let r: (Option<f64>, i16, i16, i16, bool, Option<f32>, String) = sqlx::query_as(
         "SELECT rain_in::float8, rain_resets, rain_capped, obs_count, is_complete, tmax_f, rain_reconcile_status FROM app.daily_rollups WHERE station_id = $1 AND local_date = '2026-06-02'",
     )
@@ -556,8 +556,12 @@ async fn rain_from_counters_with_a_reset_a_glitch_and_a_capped_jump(db: PgPool) 
     .fetch_one(&w.db)
     .await
     .unwrap();
-    assert_eq!(r.0, Some(0.08));
-    assert_eq!((r.1, r.2, r.3), (1, 1, 17));
+    assert_eq!(r.0, Some(3.09));
+    assert_eq!(
+        (r.1, r.2, r.3),
+        (1, 0, 17),
+        "rain_capped is no longer written"
+    );
     assert!(!r.4, "17 readings are far below 90% coverage");
     assert_eq!(r.5, None, "below 50% coverage there are no temperatures");
     assert_eq!(r.6, "unchecked");
@@ -574,16 +578,16 @@ async fn rain_from_counters_with_a_reset_a_glitch_and_a_capped_jump(db: PgPool) 
         Some(0.0),
         Some(0.01),
         Some(0.0),
-        Some(0.0),
-        Some(0.0),
         Some(0.01),
         Some(0.0),
         Some(0.01),
         Some(0.0),
+        Some(0.01),
+        Some(0.0), // the reset: the new value counts, the drop does not
         Some(0.02),
         Some(0.0),
         Some(0.01),
-        Some(0.0),
+        Some(3.0),
         Some(0.0),
         Some(0.01),
     ];

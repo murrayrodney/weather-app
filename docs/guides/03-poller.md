@@ -29,7 +29,7 @@ Does not own: schema, grants, `core::crypto` and `core::testdb` (04), Fly apps/s
 | F3 | Backfill idempotent and resumable (`stations.backfill_floor_ts`). |
 | F4 | Reference data from the airport GHCN-Daily station via ACIS. |
 | F5 | Rollup days are local standard time. |
-| F6 | Rain counter deltas, resets, glitches, caps, reconciliation. |
+| F6 | Rain counter differences, resets to near zero, reconciliation. |
 | D6 | Poller off and replaying by default locally; backfill local first, then once in production via `poller run-job awn_backfill` on `famweather-poller`. |
 | C3 | Session advisory locks need a session-level connection: the poller (and one-off machines) use the **direct** connection only, never a pooler (conventions). |
 
@@ -335,7 +335,7 @@ RETURNING ts_utc, (xmax = 0) AS inserted;
 
 `rain_inc_in` is never written here. A re-run of the same payload changes zero rows (and enqueues nothing). `ts_utc` is `dateutc` verbatim. Reject `ts_utc > now + 10 min` or before 2000-01-01.
 
-**Dirty days** (conventions: `app.rollup_dirty_days`): for each returned (inserted or changed) `ts_utc`, in the same transaction insert `(station_id, standard_date(ts))` and `(station_id, standard_date(ts - 4 h))` with `ON CONFLICT (station_id, local_date) DO UPDATE SET local_date = EXCLUDED.local_date` (conventions: this takes the row lock, so a concurrent rollup `DELETE` of an already-queued day cannot lose it; 04 grants `UPDATE(local_date)`). The 4-hour look-back marks the previous day too when a row lands shortly after a boundary, covering (a) rain glitch look-ahead (up to 6 readings, 3 h at 30-minute data) and (b) the console wall-day window that ends up to 1 h after the standard midnight.
+**Dirty days** (conventions: `app.rollup_dirty_days`): for each returned (inserted or changed) `ts_utc`, in the same transaction insert `(station_id, standard_date(ts))` and `(station_id, standard_date(ts - 4 h))` with `ON CONFLICT (station_id, local_date) DO UPDATE SET local_date = EXCLUDED.local_date` (conventions: this takes the row lock, so a concurrent rollup `DELETE` of an already-queued day cannot lose it; 04 grants `UPDATE(local_date)`). The 4-hour look-back marks the previous day too when a row lands shortly after a boundary, covering the console wall-day window that ends up to 1 h after the standard midnight (used by the optional reconciliation).
 
 **Field mapping** (exactly 04 section 5.6). The coercion is applied in Rust before binding; out-of-range or non-numeric values become NULL and are counted in `detail.bad_values` (a bad value never fails the batch):
 
@@ -388,28 +388,24 @@ With an empty `job_runs` history this is the full history (every date is enqueue
 
 **Day definition (F5).** `stations.std_utc_offset_minutes` is the constant standard offset; `standard_date(ts) = (ts + off).date()` equals `app.lst_date`; day bounds `[date 00:00 - off, +24 h)` UTC are always 24 h. At startup warn if the stored offset differs from `chrono_tz` `base_utc_offset` of `timezone` (stored value wins). `core::time`: `standard_day_bounds(off, date)`, `standard_date(off, ts)`, `base_offset_minutes(tz, at)`, and (optional, 7.3 reconciliation) `wall_day_bounds(tz, date)`.
 
-**Step 1: `rain_inc_in`.** Per station-month: load rows from `month_start - 1 row` through `month_end + GLITCH_LOOKAHEAD_READINGS rows`, compute `core::rain::increments` over that whole contiguous series, and write `rain_inc_in` **only** for rows whose `ts` lies inside the standard day being processed (`UPDATE ... SET rain_inc_in = round($1::float8::numeric,3) WHERE ... AND rain_inc_in IS DISTINCT FROM ...`). The predecessor row and the look-ahead rows are read, never rewritten.
+**Step 1: `rain_inc_in`.** Per station-month: load the one reading before `month_start` (the predecessor, needed for the first difference) and the month's rows, compute `core::rain::increments` over that contiguous series, and write `rain_inc_in` **only** for rows whose `ts` lies inside the standard day being processed (`UPDATE ... SET rain_inc_in = round($1::float8::numeric,3) WHERE ... AND rain_inc_in IS DISTINCT FROM ...`). The predecessor row is read, never rewritten. There is no look-ahead.
 
 **Coverage and temperatures.** AWN history is 5 or 30 minute data. Per day: `interval = 5 min` if the median gap between that day's consecutive readings is <= 7.5 min, else `30 min`. `covered = count(temp_f IS NOT NULL) * interval`; `coverage = min(1, covered / 24 h)`. `obs_count = count(temp_f IS NOT NULL)` (288 or 48 when complete). `coverage < 0.5`: `tmax_f`, `tmin_f` NULL (so query-time GDD is NULL) and `is_complete=false`; `0.5 <= coverage < 0.9`: values computed, `is_complete=false`; `>= 0.9`: `is_complete=true`; a day that includes `now` is always `is_complete=false`. `tmax_f/tmin_f` ignore values outside `[-60, 130]` F (counted in `detail.temp_outliers`). Constants in code; proposals (Q3).
 
-**Rain from counters (F6).** `core::rain::increments(rows) -> Vec<Inc{ts, inc: Option<f64>, reset, glitch, capped}>`; constants in `core::rain::consts` (all proposals, Q3):
+**Rain from counters (F6).** `core::rain::increments(rows) -> Vec<Inc{ts, inc: Option<f64>, reset}>`; constants in `core::rain::consts` (proposals, Q3). Rodney's decision of Oct 18, 2026 replaced the earlier glitch, cap and noise rules with plain differences plus reset to near zero:
 
 | Const | Value |
 | --- | --- |
-| `MAX_INC_PER_5MIN_IN` | 0.5 |
-| `MAX_INC_ABS_IN` | 4.0 |
-| `GLITCH_MIN_DROP_IN` | 0.05 |
-| `GLITCH_LOOKAHEAD_READINGS` | 6 |
-| `NOISE_IN` | 0.0005 |
+| `RESET_NEAR_ZERO_IN` | 0.05 |
 | `RECON_ABS_IN` / `RECON_REL` | 0.05 / 0.10 |
 
 1. **Counter choice per station-month**: among `rain_total_in`, `rain_yearly_in`, `rain_daily_in` choose the first that is non-null in at least 90% of that month's stored rows. None: `rain_in` NULL, `rain_reconcile_status='unchecked'`, rows' `rain_inc_in` NULL. All days in a month use the same counter.
-2. Iterate the series with the chosen counter `c`. A pair contributes only if **both** rows have a non-null chosen counter, so the first row of a day uses its predecessor only when that predecessor's chosen counter is non-null (otherwise `inc = NULL`). Round counters to 0.001; `d = c_i - c_{i-1}`; `gap = t_i - t_{i-1}`:
-   - `|d| < NOISE_IN`: `inc = 0`.
-   - `d >= 0`: `inc = d`.
-   - `d < 0`: if `-d >= GLITCH_MIN_DROP_IN` and some `j` within `GLITCH_LOOKAHEAD_READINGS` readings has `c_j >= c_{i-1} - NOISE_IN` it is a **glitch**: rows `i..j-1` get `inc = 0` (`glitch=true`) and row `j` gets `inc = max(0, c_j - c_{i-1})`. Otherwise it is a **reset**: `inc = c_i`, `reset=true`.
-   - Cap: `cap = min(MAX_INC_PER_5MIN_IN * ceil(gap/5 min), MAX_INC_ABS_IN)`; `inc > cap` -> `inc = 0`, `capped=true`, `warn` (station id and `ts` only).
-3. `daily_rollups.rain_in = sum(rain_inc_in)` over rows with `ts` in `[day_start, day_end)`; `rain_resets` and `rain_capped` are that day's counts; glitches go into `detail.rain_glitches` (no column).
+2. Iterate the series with the chosen counter `c`. A pair contributes only if **both** rows have a non-null chosen counter, so the first row of a day uses its predecessor only when that predecessor's chosen counter is non-null (otherwise `inc = NULL`). Round counters to 0.001, then exactly two rules:
+   - **Plain difference:** `inc = c_i - c_{i-1}`, rounded to 0.001.
+   - **Reset:** if `c_i < c_{i-1}` and `c_i < RESET_NEAR_ZERO_IN`, the counter was reset: `inc = c_i` (rain from zero; the drop itself is not counted) and `reset=true`.
+
+   Nothing else: no glitch window, no cap, no noise rule. Consequence: a drop that does not land near zero is a plain (negative) difference, and `observations.rain_inc_in` has `CHECK (rain_inc_in >= 0)` (04), so such a row makes the day's write fail until the rule or the constraint is revisited (see Q3).
+3. `daily_rollups.rain_in = sum(rain_inc_in)` over rows with `ts` in `[day_start, day_end)`; `rain_resets` is that day's reset count. `rain_capped` (04) is no longer written and stays at its default 0. Without resets, a season's running total equals the last counter value minus the first.
 
 **Reconciliation (post-go-live, optional: implement last, T16).** Until it exists, write `rain_reconcile_status='unchecked'`, `awn_daily_rain_in` and `rain_reconcile_diff_in` NULL. When implemented: wall-clock window `(start, end]` from `wall_day_bounds(timezone, local_date)` (`start` = console local midnight); rows with `ts > start && ts <= end`, using the increments already computed in the month series (so the next midnight row is included once it exists; the 4-hour dirty look-back in 7.1 re-dirties the day when it arrives). `console_rain_in = sum(inc)`; `awn_daily_rain_in = max(rain_daily_in)`; status `unchecked` when the month's counter is `rain_daily_in`, `no_awn_total` when `rain_daily_in` is NULL in the window, `mismatch` when `|console - awn| > max(RECON_ABS_IN, RECON_REL * awn)`, else `ok`; store the diff. `rain_in` stays the standard-day value. Assumes the console clock zone equals `stations.timezone` (Q4).
 
@@ -417,7 +413,7 @@ With an empty `job_runs` history this is the full history (every date is enqueue
 
 **Write** per station-day: `INSERT ... ON CONFLICT (station_id, local_date) DO UPDATE ... WHERE (...) IS DISTINCT FROM (...)`, with `computed_at = now()` on change.
 
-`detail`: `{stations, days_processed, days_changed, resets, capped, rain_glitches, mismatches, temp_outliers, housekeeping_done_on, job_runs_deleted}`.
+`detail`: `{stations, days_processed, days_changed, resets, mismatches, temp_outliers, housekeeping_done_on, job_runs_deleted}`.
 
 ### 7.5 `reference_sync` (daily)
 
@@ -539,7 +535,7 @@ Harness (conventions): `make test-backend` runs the `test-backend` Compose servi
 
 ### 12.1 Unit tests
 
-Rain (`core::rain`): monotone counter; reset `[1.20, 1.25, 0.00, 0.04]` gives `0.05, 0, 0.04` and one reset; **glitch `1.20 -> 0.30 -> 1.20` gives increments 0, 0 and no reset**; `1.20 -> 0.30 -> 1.25` gives `0, 0.05`; a drop under `GLITCH_MIN_DROP_IN` is a reset; a drop that never returns within 6 readings is a reset; `0.00 -> 5.00` in 5 min is capped to 0, and so is a 0.6 in jump in 5 min; a 4.0 in jump over a 4 h gap (cap `min(0.5*48, 4.0) = 4.0`) is accepted; null ends give NULL; the first row of a day uses its predecessor only when the predecessor's chosen counter is non-null; the counter is chosen per station-month and is the same for every day of the month; fallback to `rain_daily_in`; noise ignored; reconcile `ok`/`mismatch`/`no_awn_total`/`unchecked` (`unchecked` whenever the counter is `rain_daily_in`); the `(start, end]` window excludes the 00:00 reading's carried increment.
+Rain (`core::rain`): monotone counter; plain differences (a `0.00 -> 5.00` step is 5.00, no cap; no noise rule); reset `[1.20, 1.25, 0.00, 0.04]` gives `0.05, 0, 0.04` and one reset; a drop to a value under `RESET_NEAR_ZERO_IN` counts the new value and not the drop; a reset on the first or last reading of a day and of a month (the month case through the one predecessor row); with no resets the sum of increments equals last value minus first; null ends give NULL; the first row of a day uses its predecessor only when the predecessor's chosen counter is non-null; the counter is chosen per station-month and is the same for every day of the month; fallback to `rain_daily_in`; reconcile `ok`/`mismatch`/`no_awn_total`/`unchecked` (`unchecked` whenever the counter is `rain_daily_in`); the `(start, end]` window excludes the 00:00 reading's carried increment.
 
 Coverage: 288 readings at 5 min and 48 at 30 min both give `is_complete=true`; 30-minute data with 20 readings (coverage 0.42) gives NULL `tmax_f/tmin_f` and `is_complete=false`; 30-minute data with 40 readings (0.83) computed but incomplete.
 
@@ -557,7 +553,7 @@ Config: every guard. Log redaction (S7, required): register `TESTKEY-abcdef12345
 
 - `awn_ingest` with `fixture-poller-key`: three stations ingested, timestamps shifted so the newest is `now`, `last_observed_at`, `credentials.last_ok_at`, `job_runs` success. Unknown device reported, missing device counted, disabled station and `invalid`/`replaced` credentials skipped. Catch-up: data ending 3 h ago is filled; a 13-day gap stops at 12 pages, records `detail.gaps` and logs the remedy, and `last_observed_at` never moves backwards; the stop condition `oldest <= last` ends paging.
 - 30-minute test scenario: ingest and rollup produce `is_complete=true` days with 48 readings.
-- Rollup end to end: current-year days exist after replay ingest and backfill; the reset, glitch and capped-spike scenario gives the expected `rain_in`, `rain_resets`, `rain_capped`; a late-arriving row enqueues its day and (within 4 h of a boundary) the previous day, nothing else; an ingest that commits during a rollup transaction is not lost, including the **row-already-queued interleaving** (the day is queued, the rollup's `DELETE` is open, the ingest's `ON CONFLICT DO UPDATE` blocks on the row lock until the rollup commits and then re-inserts the day: test with two connections and explicit transaction ordering); a month with one dirty day reprocesses every day of that month, so a counter-choice change rewrites the whole month; `rain_inc_in` is written only inside the processed day and the predecessor row is never rewritten; an empty `job_runs` history processes full history in date order; two concurrent rollups cannot both run (lock). Post-backfill rollup waits for a held `job:daily_rollup` lock (bounded) and then runs the backfilled range.
+- Rollup end to end: current-year days exist after replay ingest and backfill; the reset scenario gives the expected `rain_in` and `rain_resets`; a late-arriving row enqueues its day and (within 4 h of a boundary) the previous day, nothing else; an ingest that commits during a rollup transaction is not lost, including the **row-already-queued interleaving** (the day is queued, the rollup's `DELETE` is open, the ingest's `ON CONFLICT DO UPDATE` blocks on the row lock until the rollup commits and then re-inserts the day: test with two connections and explicit transaction ordering); a month with one dirty day reprocesses every day of that month, so a counter-choice change rewrites the whole month; `rain_inc_in` is written only inside the processed day and the predecessor row is never rewritten; an empty `job_runs` history processes full history in date order; two concurrent rollups cannot both run (lock). Post-backfill rollup waits for a held `job:daily_rollup` lock (bounded) and then runs the backfilled range.
 - Backfill: 60 days of replay history, 288 rows per page; `--max-pages 2` stops with `backfill_floor_ts` set; a rerun resumes and ends on an empty page; another run finishes immediately; `--restart` inserts and updates 0; one `job_runs` row per station; no pings are sent; duplicate `dateutc` in a page does not break the upsert; `--restart --since <date>` fills an ingest gap.
 - Empty-station ingest fetches exactly one page and logs no gap warning; a gap over 12 pages logs the `awn_backfill --restart --since` remedy text.
 - Reference sync with `USW00099001..3` (a refresh with no rows leaves `last_synced_date` unchanged; `sdate = min(last_synced_date + 1, yesterday - 13)` for both a recent and a long-stale station; a revised temperature in a re-fetch updates the row): loads; `T` gives NULL precip and `precip_trace=true`; the second run refreshes only 14 days; `last_synced_date` updated. Pickup: a newly inserted `reference_stations` row (`last_synced_date IS NULL`) is fully loaded by the hourly pickup within the hour, an hourly pickup with nothing to load writes no `job_runs` row, and the pickup never runs while the daily run holds the lock.
@@ -596,7 +592,7 @@ Config: every guard. Log redaction (S7, required): register `TESTKEY-abcdef12345
 
 - **Q1 (Closed, Oct 7)** GDD is configurable and computed at query time by the API; the poller computes none.
 - **Q2 Baselines.** Loveland is FNL, `USW00094035` (replaces USC00053005; record from 2011-10-01, confirmed through ACIS on Oct 7, 2026); elevation fit for USW00024144 (3,865 ft) and USW00024022 (7,273 ft) still unchecked against the owners' stations; ACIS accepts GHCN ids as `sid` (confirmed); percentile-year eligibility is 02's.
-- **Q3 Thresholds are proposals** (all constants in code): 0.5 in per 5 min and 4.0 in absolute caps, the glitch rule (drop of at least 0.05 in returning within 6 readings), reconcile tolerance max(0.05 in, 10%), coverage 0.5/0.9, temperature bounds [-60, 130] F. Rodney to confirm after the first backfill using the reset/glitch/capped/mismatch counts.
+- **Q3 Thresholds are proposals** (all constants in code): reset-to-near-zero threshold 0.05 in (Oct 18, 2026: replaced the glitch, cap and noise rules), reconcile tolerance max(0.05 in, 10%), coverage 0.5/0.9, temperature bounds [-60, 130] F. Known edge: a counter drop that does not land near zero yields a negative increment, which `observations.rain_inc_in >= 0` rejects; decide then whether to relax the constraint or add a rule.
 - **Q4 Console time zone.** Reconciliation assumes the console clock uses `stations.timezone` with DST; otherwise `mismatch` fires daily.
 - **Q5 New devices.** Unknown MACs are reported, not auto-created. Auto-create wanted? The possible Mesa, AZ station on the Laramie owner's account would appear as an unknown device and needs a baseline before enabling.
 - **Q6 Bad application key response and lone credentials.** 401 vs 403 for a bad application key is unverified (Apiary page not retrievable); verify at T7. Under the conventions' rule a credential is marked `invalid` only if another credential succeeded in the same run, so a lone revoked key fails the job (and alerts) but is never marked invalid until a second credential exists.
@@ -604,4 +600,5 @@ Config: every guard. Log redaction (S7, required): register `TESTKEY-abcdef12345
 - **Q10 AWN history depth, `endDate` inclusivity, 288 limit, 5- versus 30-minute interval.** Confirm at T7; backfill records `earliest_ts`.
 - **Q11 `snow` from ACIS** is not stored.
 - **Q12 Replay data is shifted once at process start**; no new readings appear later (acceptable for local dev). Two replay processes started in different 5-minute slots (for example the scheduler and a later `make e2e-data` run) use different shifts, so the same fixture reading lands at different timestamps and each process's upserts overwrite the other's rows at the overlapping timestamps. The data stays plausible but is not stable across processes; acceptable locally, and a reason to run `make e2e-data` on a `make reset` stack or with the poller idle.
+- **Q13 Rain rules.** Review the rain rules against the first month of real station data.
 - **Assumptions.** Airport GHCN-Daily days are midnight-to-midnight local standard time (F5). ACIS free access stays keyless at this volume.
