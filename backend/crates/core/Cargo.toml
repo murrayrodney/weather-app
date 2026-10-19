@@ -1,0 +1,53 @@
+# Package name note: the guides call this crate `core`, but a crate named `core` shadows Rust's built-in `core`
+# (derives and macros expand to `::core::...`). The directory stays `crates/core`; the package is `famweather-core`
+# and the library is imported as `famweather_core`.
+[package]
+name = "famweather-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[lib]
+name = "famweather_core"
+
+[features]
+default = []
+# Test-only constructors and overrides (LiveAwn::with_base, ...). Never enabled by release binaries (conventions).
+test-support = []
+# `decrypt` gates core::crypto::decrypt_credential (poller only; never api or admin binaries).
+decrypt = []
+# `testdb` gates core::testdb (dev-dependencies only, never in release binaries).
+testdb = []
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+flate2.workspace = true
+futures.workspace = true
+hex.workspace = true
+hpke.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+# The crate's own tests always run with decrypt, testdb and test-support on (dev-dependencies do not reach release builds).
+famweather-core = { path = ".", features = ["decrypt", "testdb", "test-support"] }
+rand_core.workspace = true
+tempfile.workspace = true
+wiremock.workspace = true
