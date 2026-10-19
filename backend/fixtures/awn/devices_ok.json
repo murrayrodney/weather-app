@@ -1,0 +1,42 @@
+[
+  {
+    "macAddress": "AA:BB:CC:00:01:01",
+    "lastData": {
+      "dateutc": 1760702400000,
+      "tempf": 52.3,
+      "humidity": 41,
+      "windspeedmph": 4.2,
+      "baromrelin": 29.91,
+      "dailyrainin": 0,
+      "tz": "America/Denver",
+      "date": "2025-10-17T12:00:00.000Z"
+    },
+    "info": {
+      "name": "Fixture Station One",
+      "coords": {
+        "coords": { "lat": 40.4, "lon": -105.1 },
+        "elevation": 5000.0
+      }
+    }
+  },
+  {
+    "macAddress": "AA:BB:CC:00:01:02",
+    "lastData": {
+      "dateutc": 1760702400000,
+      "tempf": 49.8,
+      "humidity": 46,
+      "windspeedmph": 2.1,
+      "baromrelin": 29.88,
+      "dailyrainin": 0.01,
+      "tz": "America/Denver",
+      "date": "2025-10-17T12:00:00.000Z"
+    },
+    "info": {
+      "name": "Fixture Station Two",
+      "coords": {
+        "coords": { "lat": 40.4, "lon": -105.0 },
+        "elevation": 5100.0
+      }
+    }
+  }
+]

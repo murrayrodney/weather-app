@@ -1,0 +1,42 @@
+{
+  "info": {
+    "coords": {
+      "coords": {
+        "lat": 41.3,
+        "lon": -105.6
+      },
+      "elevation": 7200.0
+    },
+    "name": "Demo Station Laramie"
+  },
+  "lastData": {
+    "baromabsin": 25.07,
+    "baromrelin": 29.87,
+    "battin": 1,
+    "battout": 1,
+    "dailyrainin": 0.0,
+    "date": "2026-10-15T12:00:00.000Z",
+    "dateutc": 1792065600000,
+    "dewPoint": 30.8,
+    "eventrainin": 0.0,
+    "feelsLike": 34.3,
+    "hourlyrainin": 0.0,
+    "humidity": 79,
+    "humidityin": 42,
+    "lastRain": "2026-10-14T03:10:00.000Z",
+    "maxdailygust": 11.6,
+    "monthlyrainin": 1.83,
+    "solarradiation": 0.0,
+    "tempf": 35.0,
+    "tempinf": 68.9,
+    "totalrainin": 9.03,
+    "tz": "America/Denver",
+    "uv": 0,
+    "weeklyrainin": 0.15,
+    "winddir": 161,
+    "windgustmph": 8.6,
+    "windspeedmph": 7.2,
+    "yearlyrainin": 13.52
+  },
+  "macAddress": "AA:BB:CC:00:00:02"
+}

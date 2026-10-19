@@ -1,0 +1,60 @@
+[package]
+name = "poller"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "poller_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "poller"
+path = "src/main.rs"
+
+[[example]]
+name = "record_fixtures"
+path = "examples/record_fixtures.rs"
+# Fixtures are made and derived with the synthetic generator and the test-only client overrides.
+required-features = ["test-support"]
+
+[features]
+default = []
+# Test-only constructors and overrides; never enabled by a release build.
+test-support = ["famweather-core/test-support"]
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+clap.workspace = true
+# The poller is the only crate that enables `decrypt` (S5).
+famweather-core = { workspace = true, features = ["decrypt"] }
+# Gzip for the synthetic fixture writer (compiled only with `test-support`, but cargo features cannot gate a plain dep cheaply).
+flate2.workspace = true
+futures.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# Integration tests use the test-only overrides (gate spacing, backoff); dev-dependencies never reach release builds.
+poller = { path = ".", features = ["test-support"] }
+famweather-core = { workspace = true, features = ["decrypt", "testdb", "test-support"] }
+base64.workspace = true
+regex.workspace = true
+# The recorder example (live recording of AWN/ACIS) prompts for the key and fetches raw ACIS answers.
+reqwest.workspace = true
+rpassword.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+wiremock.workspace = true
