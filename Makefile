@@ -31,7 +31,7 @@ reset-link:      ; @test -n "$(EMAIL)" || (echo "usage: make reset-link EMAIL=yo
 add-station:     ; $(C) --profile tools run --rm admin admin add-station $(ARGS)
 e2e-data:        ; ./ops/local/e2e-data.sh
 psql:            ; $(C) exec db psql -U postgres -d postgres
-# Host steps need the Node major pinned in web/.nvmrc (engine-strict); ops/local/web-node.sh finds or installs it and
+# Host steps need the Node major pinned in web/.nvmrc (engine-strict); ops/local/web-node.sh finds it and
 # prints a directory for PATH (empty when the current node already matches).
 web-dev:
 	@d="$$(./ops/local/web-node.sh)" && cd web && PATH="$${d:+$$d:}$$PATH" npm ci && PATH="$${d:+$$d:}$$PATH" PUBLIC_SUPABASE_URL=http://localhost:5173 PUBLIC_SUPABASE_ANON_KEY='$(call envval,PUBLIC_SUPABASE_ANON_KEY)' npm run dev
