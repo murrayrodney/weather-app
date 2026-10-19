@@ -1,0 +1,53 @@
+[build]
+  command = "npm ci && npm run build && node scripts/check-build.mjs && node scripts/headers.mjs check && node scripts/check-bundle-secrets.mjs"
+  publish = "build"
+  # Skip Dependabot deploy previews: exit 0 = skip the build, exit 1 = build.
+  # CONTEXT (production | deploy-preview | branch-deploy | dev) and HEAD (the head branch from the Git provider; for a
+  # pull request, its source branch) are documented Netlify build variables (docs.netlify.com, Environment variables,
+  # fetched 2026-10-17); ignore exit codes: 0 stops the build, 1 continues (docs.netlify.com, Ignore builds).
+  ignore = 'test "$CONTEXT" = deploy-preview && case "$HEAD" in dependabot/*) exit 0;; esac; exit 1'
+
+[build.environment]
+  NODE_VERSION = "26"
+
+# /api proxy first (status 200 = rewrite, force so it beats any static file).
+# Signed proxy: commented out for the first deploy (conventions). Enable together with the API secret:
+# uncomment the next line and set NETLIFY_PROXY_SECRET in Netlify (runtime scope) and on the API.
+[[redirects]]
+  from = "/api/*"
+  to = "https://famweather-api.fly.dev/api/:splat"
+  status = 200
+  force = true
+  # signed = "NETLIFY_PROXY_SECRET"
+
+# Missing app chunks must 404, not return the SPA page as JavaScript.
+[[redirects]]
+  from = "/_app/*"
+  to = "/404.html"
+  status = 404
+
+# SPA fallback last; real static files win because force is not set.
+[[redirects]]
+  from = "/*"
+  to = "/200.html"
+  status = 200
+
+# BEGIN GENERATED HEADERS (scripts/headers.mjs generate; do not edit by hand)
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "style-src 'self'; style-src-attr 'unsafe-hashes' 'sha256-S8qMpvofolR8Mpjy4kQvEm7m1q8clzU4dfDH0AmvZjo='; img-src 'self'; font-src 'self'; connect-src 'self' https://<project-ref>.supabase.co; manifest-src 'self'; media-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "no-referrer"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Resource-Policy = "same-origin"
+    X-Robots-Tag = "noindex, nofollow"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+
+[[headers]]
+  for = "/_app/immutable/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+# END GENERATED HEADERS

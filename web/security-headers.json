@@ -1,0 +1,33 @@
+{
+  "csp": {
+    "style-src": ["'self'"],
+    "style-src-attr": ["'unsafe-hashes'", "'sha256-S8qMpvofolR8Mpjy4kQvEm7m1q8clzU4dfDH0AmvZjo='"],
+    "img-src": ["'self'"],
+    "font-src": ["'self'"],
+    "connect-src": ["'self'"],
+    "manifest-src": ["'self'"],
+    "media-src": ["'none'"],
+    "worker-src": ["'none'"],
+    "frame-src": ["'none'"],
+    "object-src": ["'none'"],
+    "base-uri": ["'none'"],
+    "form-action": ["'self'"],
+    "frame-ancestors": ["'none'"]
+  },
+  "csp_production_additions": {
+    "connect-src": ["https://<project-ref>.supabase.co"],
+    "upgrade-insecure-requests": []
+  },
+  "headers_all": {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "X-Robots-Tag": "noindex, nofollow"
+  },
+  "headers_production_only": { "Strict-Transport-Security": "max-age=31536000; includeSubDomains" },
+  "cache_control": { "/_app/immutable/*": "public, max-age=31536000, immutable" },
+  "expected_html_cache_control": { "netlify": "public, max-age=0, must-revalidate", "caddy": "no-cache" }
+}

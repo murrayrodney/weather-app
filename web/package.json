@@ -1,0 +1,47 @@
+{
+  "name": "famweather-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26 <27"
+  },
+  "scripts": {
+    "build": "vite build && node scripts/write-version.mjs",
+    "dev": "vite dev",
+    "lint": "node scripts/with-test-env.mjs svelte-kit sync && eslint .",
+    "check": "node scripts/with-test-env.mjs svelte-kit sync && node scripts/with-test-env.mjs svelte-check --tsconfig ./tsconfig.json",
+    "test": "node scripts/with-test-env.mjs svelte-kit sync && node scripts/with-test-env.mjs vitest run",
+    "test:tz": "TZ=America/Denver npm test && TZ=UTC npm test",
+    "test:e2e": "playwright test",
+    "test:bundle": "node scripts/check-bundle-secrets.mjs",
+    "headers:generate": "node scripts/headers.mjs generate",
+    "headers:check": "node scripts/headers.mjs check"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.118.0",
+    "d3-array": "3.2.4",
+    "d3-scale": "4.0.2",
+    "d3-shape": "3.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@sveltejs/adapter-static": "3.0.10",
+    "@sveltejs/kit": "2.70.3",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/d3-array": "3.2.2",
+    "@types/d3-scale": "4.0.9",
+    "@types/d3-shape": "3.2.0",
+    "@types/node": "26.6.5",
+    "eslint": "10.13.0",
+    "eslint-plugin-svelte": "3.23.1",
+    "globals": "17.13.0",
+    "svelte": "5.57.2",
+    "svelte-check": "4.7.7",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
+  }
+}
