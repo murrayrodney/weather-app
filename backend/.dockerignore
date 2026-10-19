@@ -1,0 +1,4 @@
+target
+.git
+# Replay fixtures reach containers only through the FIXTURES_DIR volume, never the image.
+fixtures
