@@ -64,7 +64,7 @@ Does not own (reference these files):
 
 - Single origin: browser talks to `/api/*` (proxied) and to Supabase Auth. Locally the Supabase URL is `http://localhost:8000`; production: the Supabase project URL.
 - Build-time env: only `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY`, passed as process env.
-- Shared error codes: `unauthorized` (401), `account_inactive` (403), `forbidden` (403), `not_found` (404; "doesn't exist" and "not viewable" are identical), `rate_limited` (429 with `Retry-After`), `validation_failed` (422). Codes from 02: `invalid_key`, `unknown_device`, `not_a_candidate`, `timezone_required` (422), `device_already_registered`, `conflict` (409), `upstream_busy` (503), `upstream_unavailable` (502), `request_timeout` (408), `payload_too_large` (413), `overloaded`, `auth_unavailable` (503). The web keys only on these, never on other strings.
+- Shared error codes: `unauthorized` (401), `account_inactive` (403), `forbidden` (403), `not_found` (404; "doesn't exist" and "not viewable" are identical), `rate_limited` (429 with `Retry-After`), `validation_failed` (422). Codes from 02: `invalid_key`, `unknown_device`, `not_a_candidate`, `timezone_required` (422), `device_already_registered`, `conflict` (409), `upstream_busy` (503), `upstream_unavailable` (502), `request_timeout` (408), `payload_too_large` (413), `overloaded`, `auth_unavailable` (503), `method_not_allowed` (405; generic message). The web keys only on these, never on other strings.
 - Every API response sets `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` itself (the e2e header test asserts it).
 - GDD is computed by the API at query time from stored daily tmax/tmin (no stored GDD); the web chooses `gdd_method` (`simple_avg` default, `clamped_50_86`), `gdd_base` (default 50) and `gdd_start` (default `04-01`), the response echoes them in `gdd`, and station and baseline always use the same values; the web never computes GDD.
 - Forecasts are not stored (proposals/06, option A, Oct 7): the API serves a live forecast with ensemble p10/p50/p90 bands (`/forecast`) and a day-by-day "forecast N days ago" view (`/forecast/changes`); the browser never calls Open-Meteo, so there is no Open-Meteo host in `connect-src`. Percentiles exist only in the live forecast chart; nothing keeps a percentile history. Forecast days are local wall-clock days.
@@ -381,6 +381,7 @@ The client timeout is 30000 ms for every request (02's overall timeout is 25 s; 
 | 409 `device_already_registered` | "That device is already registered." |
 | 422 `unknown_device` | "That device is not on this account. Check the device list and try again." |
 | 422 `invalid_key` | (connect view shows the generic key message, 4.7) |
+| 405 `method_not_allowed` | "Something went wrong on our side. Try again." (client bug, never expected) |
 | any other status or code (catch-all), `bad_response`, `unknown` | "Something went wrong on our side. Try again." |
 | `session_expired` / `account_inactive` | handled by `handleAuthError` (login shows "Your session expired. Sign in again."; inactive page shows "This account is inactive. Contact the administrator.") |
 
@@ -535,7 +536,7 @@ Netlify does not apply `[[headers]]` to proxied content, so API responses carry 
 
 ### 4.9 `web/netlify.toml` and Caddy
 
-`web/netlify.toml` (placeholders written literally: Fly app `famweather-api`, Node `24`; only `<project-ref>` remains, in `security-headers.json` and therefore in the generated CSP):
+`web/netlify.toml` (placeholders written literally: Fly app `famweather-api`, Node `26`; only `<project-ref>` remains, in `security-headers.json` and therefore in the generated CSP):
 
 ```toml
 [build]
@@ -546,7 +547,7 @@ Netlify does not apply `[[headers]]` to proxied content, so API responses carry 
   ignore = 'test "$CONTEXT" = deploy-preview && case "$HEAD" in dependabot/*) exit 0;; esac; exit 1'
 
 [build.environment]
-  NODE_VERSION = "24"
+  NODE_VERSION = "26"
 
 # /api proxy first (status 200 = rewrite, force so it beats any static file).
 # Signed proxy: commented out for the first deploy (conventions). Enable together with the API secret:

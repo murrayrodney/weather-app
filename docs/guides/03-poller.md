@@ -133,14 +133,21 @@ pub trait AcisApi: Send + Sync { /* station_data (7.5), nearby_stations(bbox) ->
 impl LiveAcis   { pub fn new(call_timeout: Duration) -> Result<Self, AcisError>; }     // fixed host data.rcc-acis.org, keyless, never reserves gates
 impl ReplayAcis { pub fn new(fixtures_root: PathBuf) -> Result<Self, AcisError>; }
 
-// core::ratelimit
-pub struct GateBusy;
+// core::ratelimit (as delivered)
+pub struct GateBusy { pub reason: GateBusyReason }                   // Display + Error; Display never carries a URL
+pub enum GateBusyReason { Busy /* wait would exceed max_wait: no row returned */, Database(DbError) /* the statement failed */, BadArguments }
+impl GateBusy { pub fn is_permanent(&self) -> bool }                 // SQLSTATE class 28/42/3F (missing grant or table) or a config error: logged at error, still mapped to 503 / retry later by callers
 pub async fn reserve(pool: &PgPool, name: &str, spacing: Duration, max_wait: Duration) -> Result<Duration /*wait*/, GateBusy>;
-//   the conventions' single SQL statement; caller then tokio::time::sleep(wait) (database-computed, never from Clock)
+//   the conventions' single SQL statement (const RESERVE_SQL); caller then tokio::time::sleep(wait) (database-computed, never from Clock)
 pub struct JobLock;  pub struct LockLost;
+pub struct LockTimeouts { pub connect: Duration, pub check: Duration }   // Default = LOCK_CONNECT_TIMEOUT 10 s / LOCK_CHECK_TIMEOUT 5 s
+pub fn job_lock_key(job: &str) -> i64;                               // first 8 bytes (big-endian) of sha256("job:<name>")
 pub async fn try_job_lock(opts: &PgConnectOptions, job: &str, on_connect: Option<ConnectHook>) -> Result<Option<JobLock>, DbError>;
-//   on_connect runs on the detached connection before the lock query (tests pass `SET ROLE app_poller`)
+pub async fn try_job_lock_with(opts: &PgConnectOptions, job: &str, on_connect: Option<ConnectHook>, timeouts: LockTimeouts) -> Result<Option<JobLock>, DbError>;
+//   on_connect runs on the detached connection before the lock query (tests pass `SET ROLE app_poller`). Connect + hook + lock query are
+//   bounded by timeouts.connect (DbError::Timeout; the half-open connection is dropped, which frees the lock if it had been granted).
 impl JobLock { pub async fn check(&mut self) -> Result<(), LockLost>; pub async fn release(self) -> Result<(), DbError>; }
+//   check() and release() are bounded by timeouts.check: a black-holed connection counts as LockLost.
 ```
 
 Tasks T1 to T3 deliver exactly this block (the "03 core milestone" in conventions) before 04's `admin` and 02 start. The milestone **includes `LiveAwn`, `ReplayAwn` and `list_devices`** (04's local `admin add-station` and 02's connect flow need them); it is done when it compiles, `cargo doc` shows every name above, and unit tests pass. The DB-backed gate and lock tests run after 04's migrations and `core::testdb` exist (T3a).
@@ -171,11 +178,12 @@ backend/crates/core/src/
 
 ```rust
 // core::ratelimit
-pub struct JobLock { conn: PgConnection }                    // raw, detached, NOT from the pool
+pub struct JobLock { conn: PgConnection, key: i64, op_timeout: Duration }   // raw, detached, NOT from the pool
 pub async fn try_job_lock(opts: &PgConnectOptions, job: &str, on_connect: Option<ConnectHook>) -> Result<Option<JobLock>, DbError>; // on_connect: tests pass SET ROLE app_poller
+pub async fn try_job_lock_with(opts: &PgConnectOptions, job: &str, on_connect: Option<ConnectHook>, timeouts: LockTimeouts) -> Result<Option<JobLock>, DbError>;
 impl JobLock {
-    pub async fn check(&mut self) -> Result<(), LockLost>;   // SELECT 1 on the lock connection
-    pub async fn release(self) -> Result<()>;                // pg_advisory_unlock, then close
+    pub async fn check(&mut self) -> Result<(), LockLost>;   // SELECT 1 on the lock connection, bounded by timeouts.check (default 5 s)
+    pub async fn release(self) -> Result<(), DbError>;       // pg_advisory_unlock, then close, bounded by timeouts.check
 }
 // Drop: the raw connection is dropped, which closes the socket and frees the lock server-side.
 ```
@@ -472,7 +480,7 @@ Decided Oct 7 (proposals/06, option A): the poller has no `forecast_snapshot` jo
 
 ## 10. Fixtures and replay
 
-Root `$FIXTURES_DIR` (`/fixtures` in Compose; `backend/fixtures` otherwise). Committed, sanitised, no real keys/MACs/precise coordinates.
+Root `$FIXTURES_DIR` (`/fixtures` in Compose; `/work/backend/fixtures` in `make test-backend`). **There is no default:** `core::config` requires `FIXTURES_DIR` whenever `AWN_MODE=replay` (a missing value is a startup error naming the variable), accepts it as optional when `AWN_MODE=live` (an unset value becomes an empty path that is never read), and refuses it in production for every binary (`api`, `poller`, `admin`; replay is not allowed there either). Committed, sanitised, no real keys/MACs/precise coordinates.
 
 ```
 awn/devices_ok.json                 # fixture-valid-key: MACs AA:BB:CC:00:01:01, AA:BB:CC:00:01:02 (not seeded), with info.coords and lastData.tz
@@ -510,7 +518,7 @@ Order matters: station history cannot be rebuilt (AWN keeps only a limited histo
 - [ ] **T1 Config, db, clock.** `core::config` (`load(Binary)`, `Config` enum, every shared refusal, demo-fingerprint refusal with the exact message), `core::db::pool` with `PoolSpec` defaults, `core::clock`. Done when it compiles and the guard unit tests pass, including a production run refusing a demo value with `refusing <VAR>: demo value`.
 - [ ] **T2 Redaction.** `core::redact` (`register`, `scrub`, `init_tracing`, `install_panic_hook` logging file:line and a fixed message only, `http_error`). Done when it compiles and the log-redaction and panic-hook unit tests (12.1) pass.
 - [ ] **T3 Core awn, gates, locks and Dockerfile (compile level).** `core::awn` (`ApiKey`, `Mac`, `AwnDevice`, `AwnError`, `AwnApi`, `LiveAwn::new`, `ReplayAwn::new` with `list_devices`), `core::ratelimit` (`reserve`, `JobLock`, `try_job_lock` with the connect hook), and `backend/Dockerfile` (one image, binaries copied only for crates that exist; `COPY certs/`; `backend/Cargo.toml` uses `resolver = "2"`). T3 also **commits hand-written synthetic connect-flow fixtures at their final paths** (`awn/devices_ok.json`, `awn/devices_unauthorized.json`, `awn/devices_rate_limited.json`, with the conventions' MACs `AA:BB:CC:00:01:01/02`, `info.coords`, `lastData.tz`); T7 only verifies them against a real recording or replaces them. Done when it compiles, `cargo doc` shows every name in 3.6, the image builds, and the unit tests (replay `list_devices`, error mapping, SQL text of `reserve`) pass. **This ends the 03 core milestone.**
-- [ ] **T3a DB-backed gate and lock tests.** After 04's migrations and `core::testdb` exist (04 tasks 1 to 6): gate and lock tests in 12.3 against the migrated test database. Done when they pass under `make test-backend`.
+- [x] **T3a DB-backed gate and lock tests.** Delivered with 04 (`backend/crates/core/tests/db_gates_locks.rs`): the gate and lock cases of 12.3 that need no job framework (single holder, different jobs, free after panic / cancellation / normal release, `pg_terminate_backend` frees the lock and `check()` reports `LockLost`, 16 concurrent reservations across two warmed role pools spaced (100 ms; a barrier start, the check is on database time), `GateBusy` beyond `max_wait`, cancelled-while-sleeping leaves the slot counted, a missing grant is a permanent gate error). The cases that need `run_job` (a job aborting `failed` on `lock_lost`, "poller reservations never use `awn:app:api`") stay with T4 and T5. They pass under `make test-backend`.
 - [ ] **T4 Job framework.** `job.rs`, `run_job`, `job_runs`, heartbeat, `poller healthcheck`, `run-job`, scheduler (compile-time list of implemented jobs, `interval_at`), shutdown, disabled log line. Done when the framework tests (12.3) pass.
 - [ ] **T5 Keys.** `poller::keys::KeyRing`. Done when round-trip and negative tests pass and `api` does not enable `decrypt`.
 - [ ] **T6 AWN history, backoff, credential rules.** `LiveAwn` behaviour (timeouts, body cap), `ReplayAwn::history` (shifting, merged series), `awn_call` with backoff and the end-of-run 401 rule, guarded credential writes. Uses synthetic fixtures under `backend/fixtures/test/` (not real recordings). Done when wiremock and replay tests pass.
@@ -527,7 +535,7 @@ Order matters: station history cannot be rebuilt (AWN keeps only a limited histo
 
 ## 12. Testing
 
-Harness (conventions): `make test-backend` runs the `test-backend` Compose service. Integration tests use `#[sqlx::test(migrations = false)]` plus `core::testdb::prepare` with `TEST_SUPERUSER_DATABASE_URL`; the code under test uses a pool whose `after_connect` runs `SET ROLE app_poller` (also applied to the detached lock connection), so grants are exercised. `FIXTURES_DIR=/work/backend/fixtures`. Grant/exposure assertions stay in `ops/db/tests/run.sh`. Tests use a `FixedClock`.
+Harness (conventions): `make test-backend` runs the `test-backend` Compose service. Integration tests use `#[sqlx::test(migrations = false)]` plus `core::testdb::prepare` with `TEST_SUPERUSER_DATABASE_URL`; the code under test uses a pool whose `after_connect` runs `SET ROLE app_poller` (also applied to the detached lock connection), so grants are exercised: `core::testdb::pool_as(&pool, "app_poller")` returns such a pool from the pool `#[sqlx::test]` hands the test, and `core::testdb::role_hook("app_poller")` returns the `ConnectHook` for `PoolSpec::after_connect` and for `try_job_lock`'s `on_connect`. The core's own DB-backed gate and lock tests (T3a) are `backend/crates/core/tests/db_gates_locks.rs`. `FIXTURES_DIR=/work/backend/fixtures`. Grant/exposure assertions stay in `ops/db/tests/run.sh`. Tests use a `FixedClock`.
 
 ### 12.1 Unit tests
 
@@ -595,5 +603,5 @@ Config: every guard. Log redaction (S7, required): register `TESTKEY-abcdef12345
 - **Q7, Q9 (closed, Oct 7).** Forecast storage is dropped (proposals/06, option A); the Previous Runs archive was checked with curl on 2026-10-07 and its results are in proposals/06 and 02 section 5.6. Nothing forecast-related is open in the poller.
 - **Q10 AWN history depth, `endDate` inclusivity, 288 limit, 5- versus 30-minute interval.** Confirm at T7; backfill records `earliest_ts`.
 - **Q11 `snow` from ACIS** is not stored.
-- **Q12 Replay data is shifted once at process start**; no new readings appear later (acceptable for local dev).
+- **Q12 Replay data is shifted once at process start**; no new readings appear later (acceptable for local dev). Two replay processes started in different 5-minute slots (for example the scheduler and a later `make e2e-data` run) use different shifts, so the same fixture reading lands at different timestamps and each process's upserts overwrite the other's rows at the overlapping timestamps. The data stays plausible but is not stable across processes; acceptable locally, and a reason to run `make e2e-data` on a `make reset` stack or with the poller idle.
 - **Assumptions.** Airport GHCN-Daily days are midnight-to-midnight local standard time (F5). ACIS free access stays keyless at this volume.

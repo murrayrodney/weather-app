@@ -37,7 +37,7 @@ Does not own: Rust code, migrations, role/grant SQL, seed content (04); API rout
 | Seed content: **04 section 12.1** (users incl. Dana and Casey, reference ids `USW00099001..03`, stations `AA:BB:CC:00:00:01..03`, follow states). Stored poller key is `fixture-poller-key`; connect-flow keys `fixture-valid-key`, `fixture-invalid-key`, `fixture-ratelimited-key` are never stored | 04, conventions (Fixtures) | `make seed`, e2e |
 | Fixtures and replay clock per conventions (Fixtures) | 03 | replay mode, `make e2e-data` |
 | `GET /api/health` and `GET /api/v1/me` (02 section 5.2) | 02 | smoke |
-| Web npm scripts `build` (output `web/build/` incl. `200.html`), `lint`, `check`, `test`, `test:tz`, `test:bundle`, `headers:check`, `test:e2e`; `web/scripts/headers.mjs` finds `ops/caddy/` at `../ops/caddy` relative to `web/`; Vite dev proxy for `/api` and `/auth/v1` to `http://localhost:8000`; Node 24 | 01 | `web` service, `web-dev`, tests |
+| Web npm scripts `build` (output `web/build/` incl. `200.html`), `lint`, `check`, `test`, `test:tz`, `test:bundle`, `headers:check`, `test:e2e`; `web/scripts/headers.mjs` finds `ops/caddy/` at `../ops/caddy` relative to `web/`; Vite dev proxy for `/api` and `/auth/v1` to `http://localhost:8000`; Node 26 | 01 | `web` service, `web-dev`, tests |
 | `web/security-headers.json` and committed `ops/caddy/security-headers.caddy` (local variant, no HSTS, no `Cache-Control`), generated and verified by `headers.mjs` | 01 | Caddy headers |
 | `ops/db/tests/run.sh` run as `postgres` inside the test project's `db` container at `/work/ops/db/tests/run.sh` | 04 | `make test-db` |
 | Test harness per conventions (Testing harness): own Compose project, tmpfs db, torn down | conventions | 5.1b, 5.7 |
@@ -77,7 +77,7 @@ One default network. No `internal: true` split: the poller (live) and api (conne
 
 Decision: Caddy mounts the whole `./web` directory read-only at `/srv/webroot` and serves `/srv/webroot/build`. Reason: `@sveltejs/adapter-static` deletes and recreates `web/build/` on every build; a bind mount of the `build` directory itself would keep pointing at the deleted inode and serve stale or no files. Mounting the parent survives rebuilds and Caddy sees new files without a restart. The build runs in the one-shot `web` service (profile `tools`) or on the host. `PUBLIC_*` values are baked at build time from process env (not the root `.env` file, which holds secrets); the `web` service passes only the two allowed variables. A multi-stage image was rejected: it forces an image rebuild per frontend change and hides `PUBLIC_*` in build args. Downside: the container sees `web/` including `node_modules`; it is read-only and local.
 
-Frontend iteration (`make web-dev`): needs host Node 24 and a one-time `cd web && npm ci`. It runs `vite dev` at `http://localhost:5173` with `PUBLIC_SUPABASE_URL=http://localhost:5173`; Vite proxies `/api` and `/auth/v1` to Caddy on 8000 (01 owns the proxy config). Password sign-in and the set-password link flow work from the Vite origin without any redirect allow-list (direct calls); printed links point at port 8000 (`SITE_URL`), so open them there. Tokens stay valid because the issuer is pinned. Verify CSP only against `localhost:8000` (dev CSP differs).
+Frontend iteration (`make web-dev`): needs host Node 26 and a one-time `cd web && npm ci`. It runs `vite dev` at `http://localhost:5173` with `PUBLIC_SUPABASE_URL=http://localhost:5173`; Vite proxies `/api` and `/auth/v1` to Caddy on 8000 (01 owns the proxy config). Password sign-in and the set-password link flow work from the Vite origin without any redirect allow-list (direct calls); printed links point at port 8000 (`SITE_URL`), so open them there. Tokens stay valid because the issuer is pinned. Verify CSP only against `localhost:8000` (dev CSP differs).
 
 ### 4.4 Local auth (GoTrue standalone)
 
@@ -111,7 +111,7 @@ Defined once in conventions, Environments. This guide supplies the placeholder `
 ### 4.8 Apple Silicon, versions
 
 - Never set `platform:`; all images are multi-arch and run natively. Forcing amd64 is slow and flaky. Rust builds natively as aarch64 (give Docker Desktop 6 GB / 4 CPUs; 02 should use BuildKit cache mounts). The Fly image is amd64 (06).
-- Host needs: Docker Compose v2 that supports `up --wait` with completed one-shot dependencies (the implementer records the exact output of `docker compose version` here on first pass; the author's host has Docker Engine 29.6.2), GNU make (3.81 on macOS is fine), `curl`, `jq`, `openssl`, `shasum`; Node 24 only for `make web-dev`.
+- Host needs: Docker Compose v2 that supports `up --wait` with completed one-shot dependencies (the implementer records the exact output of `docker compose version` here on first pass; the author's host has Docker Engine 29.6.2), GNU make (3.81 on macOS is fine), `curl`, `jq`, `openssl`, `shasum`; Node 26 only for `make web-dev`.
 - Fallback if `--wait` rejects one-shots: `docker compose up -d`, then loop `until [ "$(docker compose ps --format json | jq -s '[.[]|select(.Service|IN("db","auth","api","poller","caddy"))|select(.Health!="healthy")]|length')" = 0 ]; do sleep 2; done` with a 180 s cap.
 - Image build: `api` is the only service with `build:`; the others use the same tag (`pull_policy: never`). After backend changes run `make build && make up` (the `up` target builds first); otherwise `poller`, `migrate` and `admin` run a stale image.
 
@@ -331,7 +331,7 @@ services:
 
   web:
     profiles: ["tools"]
-    image: ${WEB_NODE_IMAGE:-node:24-bookworm-slim}
+    image: ${WEB_NODE_IMAGE:-node:26-bookworm-slim}
     working_dir: /work/web
     environment:
       PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL:-http://localhost:8000}
@@ -369,10 +369,12 @@ services:
 
   web:
     # test-web: sources are copied into a tmpfs at /work/web and built there (never the host's web/build,
-    # no root-owned files on the host). ops/caddy is visible so headers:check finds ../ops/caddy.
+    # no root-owned files on the host). ops/caddy is visible so headers:check finds ../ops/caddy; the fingerprint file is
+    # visible so the production-context bundle check can read ../backend/demo-fingerprints.txt.
     volumes: !override
       - ./web:/src/web:ro
       - ./ops/caddy:/work/ops/caddy:ro
+      - ./backend/demo-fingerprints.txt:/work/backend/demo-fingerprints.txt:ro
       - /dev/null:/work/.env:ro
     tmpfs:
       - /work/web:size=3g,exec # tmpfs is noexec by default; npm/vite need exec
@@ -399,17 +401,15 @@ services:
       CREDENTIALS_PUBLIC_KEY: ${CREDENTIALS_PUBLIC_KEY:?}
       CREDENTIALS_PRIVATE_KEY: ${CREDENTIALS_PRIVATE_KEY:?}
       CREDENTIALS_KEY_VERSION: ${CREDENTIALS_KEY_VERSION:-1}
-      SQLX_OFFLINE: "true" # for cargo test; the prepare check below unsets it
       CARGO_TARGET_DIR: /cargo-target
-      CARGO_INSTALL_ROOT: /cargo-tools
     volumes:
       - .:/work
       - /dev/null:/work/.env:ro # mask the developer's .env
-      # CI sets CI_CACHE_DIR (06 11.2) so these three become bind mounts of directories that actions/cache saves between runs;
-      # unset (local development) they stay named volumes. Compose treats a source containing "/" as a bind mount.
+      # CI sets CARGO_REGISTRY_SRC / CARGO_TARGET_SRC (06 11.2) so these two become bind mounts of directories that
+      # actions/cache saves between runs; unset (local development) they stay named volumes. Compose treats a source
+      # containing "/" as a bind mount.
       - ${CARGO_REGISTRY_SRC:-cargo_registry}:/usr/local/cargo/registry
       - ${CARGO_TARGET_SRC:-cargo_target}:/cargo-target
-      - ${CARGO_TOOLS_SRC:-cargo_tools}:/cargo-tools
     command:
       - sh
       - -ec
@@ -418,16 +418,13 @@ services:
         EXCL=""; [ -d crates/admin ] && EXCL="--exclude admin"
         cargo test --workspace $EXCL $FEAT
         if [ -d crates/admin ]; then cargo test -p admin --features compose-tests -- --test-threads=1; fi
-        cargo install sqlx-cli --version "$(cat .sqlx-cli-version)" --locked --no-default-features --features rustls,postgres
-        SQLX_OFFLINE=false PATH="/cargo-tools/bin:$PATH" cargo sqlx prepare --workspace --check
 
 volumes:
   cargo_registry:
-  cargo_tools:
   cargo_target:
 ```
 
-`test-backend` runs the conventions command in two steps so admin's compose tests are serialized (`--test-threads=1`) while the rest run in parallel; it then checks the committed `.sqlx/` data with a pinned sqlx-cli against the migrated test database (pin in `backend/.sqlx-cli-version`, owned by 04; 8.13). Feature flags follow what exists: `api/test-support` only when `backend/crates/api` exists, and the admin step only when `backend/crates/admin` exists. The `db` log is grepped for secret sentinels by the Makefile before teardown (5.7), which replaces a separate secret-log target.
+`test-backend` runs the conventions command in two steps so admin's compose tests are serialized (`--test-threads=1`) while the rest run in parallel. There is no `cargo sqlx prepare --check` step and no sqlx-cli install: queries are runtime `sqlx::query` with bind parameters (02 4.12), so there is no offline data. Feature flags follow what exists: `api/test-support` only when `backend/crates/api` exists, and the admin step only when `backend/crates/admin` exists. The `db` log is grepped for secret sentinels by the Makefile before teardown (5.7), which replaces a separate secret-log target.
 
 Why a separate project: the working stack's data and host ports (8000, 5432) are never touched, and `down -v` after each run leaves nothing behind. The `/dev/null` mounts only hide `.env` from container filesystems; Compose still reads `.env` for interpolation (demo values only).
 
@@ -602,7 +599,7 @@ HEALTHCHECK_URL_DBSIZE=
 
 # --- Misc ---
 RUST_LOG=info
-WEB_NODE_IMAGE=node:24-bookworm-slim
+WEB_NODE_IMAGE=node:26-bookworm-slim
 ```
 
 E2E and smoke defaults are not in this file: 01's helpers default `E2E_USER_A_EMAIL=alex@example.test`, `E2E_USER_B_EMAIL=pat@example.test`, `E2E_UNINVITED_EMAIL=nobody@example.test`, `E2E_VALID_AWN_KEY=fixture-valid-key`, `E2E_INVALID_AWN_KEY=fixture-invalid-key` themselves; `smoke.sh` defaults its route to `/api/v1/me`.
@@ -655,7 +652,8 @@ reset-link:      ; @test -n "$(EMAIL)" || (echo "usage: make reset-link EMAIL=yo
 add-station:     ; $(C) --profile tools run --rm admin admin add-station $(ARGS)
 e2e-data:        ; ./ops/local/e2e-data.sh
 psql:            ; $(C) exec db psql -U postgres -d postgres
-web-dev:         ; cd web && npm ci && PUBLIC_SUPABASE_URL=http://localhost:5173 PUBLIC_SUPABASE_ANON_KEY='$(call envval,PUBLIC_SUPABASE_ANON_KEY)' npm run dev
+web-dev:
+	@d="$$(./ops/local/web-node.sh)" && cd web && PATH="$${d:+$$d:}$$PATH" npm ci && PATH="$${d:+$$d:}$$PATH" PUBLIC_SUPABASE_URL=http://localhost:5173 PUBLIC_SUPABASE_ANON_KEY='$(call envval,PUBLIC_SUPABASE_ANON_KEY)' npm run dev
 poller-replay:   ; POLLER_ENABLED=true AWN_MODE=replay $(C) up -d --no-deps --force-recreate poller
 poller-idle:     ; POLLER_ENABLED=false $(C) up -d --no-deps --force-recreate poller
 live:            ; @test "$(call envval,AWN_APPLICATION_KEY)" != "REPLACE_WITH_DEV_APPLICATION_KEY" || (echo "set your DEV AWN application key in .env"; exit 1)
@@ -668,17 +666,17 @@ test-backend: init
 	$(call TESTRUN,$(T) run --rm test-backend)
 test-web: init
 	@if [ -f web/package.json ]; then \
-	$(call TESTRUN,$(T) run --rm web sh -c "mkdir -p /work/web && cd /src/web && tar cf - --exclude=./node_modules --exclude=./build --exclude=./.svelte-kit . | tar xf - -C /work/web && cd /work/web && npm ci && npm run lint && npm run check && npm run test && npm run test:tz && npm run build && node scripts/check-build.mjs && npm run test:bundle && npm run headers:check"); \
+	{ $(T) run --rm web sh -c "mkdir -p /work/web && cd /src/web && tar cf - --exclude=./node_modules --exclude=./build --exclude=./.svelte-kit --exclude=./test-results --exclude=./playwright-report --exclude=./tests/.auth . | tar xf - -C /work/web && cd /work/web && npm ci && npm run lint && npm run check && npm run test && npm run test:tz && npm run build && node scripts/check-build.mjs && npm run test:bundle && npm run headers:check"; rc=$$?; ./ops/local/check-secret-logs.sh "$(T)" || rc=1; $(T) down -v --remove-orphans >/dev/null 2>&1; exit $$rc; }; \
 	else echo "test-web: web/package.json absent, skipping"; fi
 test:            ; $(MAKE) check-local-only test-db test-backend test-web
 test-e2e:        ; @test "$(CONFIRM)" = 1 || (echo "test-e2e RESETS the working stack (make reset). Re-run: make test-e2e CONFIRM=1"; exit 1)
 	$(MAKE) reset up web-build seed e2e-data
-	cd web && npm ci && npx playwright install chromium && E2E_BASE_URL=http://localhost:8000 npm run test:e2e
+	@d="$$(./ops/local/web-node.sh)" && cd web && export PATH="$${d:+$$d:}$$PATH" && echo "e2e on node $$(node -v)" && npm ci && npx playwright install chromium && E2E_BASE_URL=http://localhost:8000 npm run test:e2e
 smoke:           ; ./ops/local/smoke.sh $(SMOKE_ARGS)
 reset:           ; $(C) --profile tools down -v --remove-orphans
 ```
 
-Notes: `test-*` targets depend on `init` (the `.env` mask needs the file), run in project `famweather-test` (5.1b), build the image, start only what they need (`test-db` starts `db`; `test-backend` and `test-web` pull their `depends_on`), run `ops/local/check-secret-logs.sh` on the project's logs, and tear the project down with volumes even on failure (the script runs before teardown; a hit fails the target). `test-db` runs `run.sh` as `postgres` over the unix socket (`--auth-local=trust`) with `MIGRATIONS_DIR` and `OPS_DIR` set explicitly; the script's per-role login checks use `-h 127.0.0.1` so SCRAM is exercised. `test-web` copies `web/` into a tmpfs inside the container and builds there, so the host's `web/build` is never touched or made root-owned. `check-local-only` covers only files this guide owns. `make test` is exactly CI's list. `test-e2e` is the one target that touches the working stack, because Playwright needs `localhost:8000`; it therefore requires `CONFIRM=1`, resets, rebuilds and reseeds. `smoke` needs no reset (default mode).
+Notes: `test-*` targets depend on `init` (the `.env` mask needs the file), run in project `famweather-test` (5.1b), build the image, start only what they need (`test-db` starts `db`; `test-backend` and `test-web` pull their `depends_on`), run `ops/local/check-secret-logs.sh` on the project's logs, and tear the project down with volumes even on failure (the script runs before teardown; a hit fails the target). `test-db` runs `run.sh` as `postgres` over the unix socket (`--auth-local=trust`) with `MIGRATIONS_DIR` and `OPS_DIR` set explicitly; the script's per-role login checks use `-h 127.0.0.1` so SCRAM is exercised. `test-web` copies `web/` into a tmpfs inside the container and builds there, so the host's `web/build` is never touched or made root-owned (it needs no `build api`, so it does not use the `TESTRUN` macro; it runs the same secret-log check and teardown inline). The two host steps (`web-dev`, `test-e2e`) need the Node major pinned in `web/.nvmrc` (`engines` is `>=26 <27` with `engine-strict`): `ops/local/web-node.sh` uses the current `node` if it matches, else nvm, fnm or volta, else exits with install instructions (nothing is downloaded automatically: no third-party install scripts). Playwright is not run in a container because the suite must reach the stack as `localhost:8000` (the pinned auth issuer and build-time URLs) and its helpers call the host's `docker compose`. `check-local-only` covers only files this guide owns. `make test` is exactly CI's list. `test-e2e` is the one target that touches the working stack, because Playwright needs `localhost:8000`; it therefore requires `CONFIRM=1`, resets, rebuilds and reseeds. `smoke` needs no reset (default mode).
 
 ### 5.8 `ops/local/smoke.sh` (specification; bash, `set -euo pipefail`, `curl`, `jq`)
 
@@ -773,7 +771,7 @@ How to run: `make test` (= `check-local-only test-db test-backend test-web`; CI 
 | Startup refusal | smoke 12 | non-local DB host, live+placeholder, production+demo secret |
 | Secret hygiene (S7) | smoke 13 | logs clean |
 | Grants / `can_view` | `make test-db` | 04's `run.sh` as `postgres` inside the test project's `db` (repo at `/work`, tmpfs data, SCRAM over `-h 127.0.0.1`) |
-| Rust workspace | `make test-backend` | after `migrate`; env per conventions (5.1b), `.env` masked at `/work/.env`; `cargo test` with `api/test-support`, admin `compose-tests` serialized, then `cargo sqlx prepare --workspace --check`; `db` logs grepped before teardown |
+| Rust workspace | `make test-backend` | after `migrate`; env per conventions (5.1b), `.env` masked at `/work/.env`; `cargo test` with `api/test-support`, admin `compose-tests` serialized; `db` logs grepped before teardown |
 | Web | `make test-web` | lint, check, unit, `test:tz`, build, bundle-secrets, `check-build.mjs`, `headers:check` (with `ops/caddy` visible); built in tmpfs, never in host `web/build` |
 
 ### 7.2 Web e2e support (01 section 6.3)
@@ -794,7 +792,7 @@ How to run: `make test` (= `check-local-only test-db test-backend test-web`; CI 
 10. **Production refusal message (03).** Smoke step 12(c) expects exactly `refusing <VARIABLE>: demo value` (here `refusing CREDENTIALS_PUBLIC_KEY: demo value`) and assumes that, with a valid production env, no other rule fires first and that the CA-file rule is satisfied by an empty mounted file.
 11. **Compose version.** The test overlay needs `!reset`/`!override` (Compose >= 2.24); record the tested `docker compose version` on first pass.
 12. **Secret sentinels.** `check-secret-logs.sh` greps for the prefix `canary-secret-`; 03/04 tests must use it for planted secrets (proposed). Which compose services' logs matter (currently `db auth migrate`) is open.
-13. **sqlx-cli pin.** `test-backend` reads the version from `backend/.sqlx-cli-version`, which 04 owns and commits together with `.sqlx/`. `cargo install` runs on every test run unless the `cargo_tools` volume survives; it is removed by `down -v`, so expect a slow first step (consider a prebuilt tools image later).
+13. **No sqlx-cli in tests.** `test-backend` installs no tools and runs no `cargo sqlx prepare --check` (queries are runtime `sqlx::query`, 02 4.12; there is no `backend/.sqlx-cli-version`). The `cargo_tools` volume, `CARGO_INSTALL_ROOT` and `SQLX_OFFLINE` were removed (nothing wrote to them; queries are runtime project-wide). 06 still sets `CARGO_TOOLS_SRC` and `SQLX_OFFLINE` in its CI snippets; those are now no-ops and 06 should drop them.
 14. **CI.** Whether CI also runs `make smoke SMOKE_ARGS=--clean` on every push (Docker-in-CI, a few minutes) or only before releases is undecided; the repository is public, so minutes are free, but the default stays **not** on every push (it is slow; run it before releases or on demand with `workflow_dispatch`).
 15. **Baseline picker fixtures (Oct 7).** The connect-flow devices in `awn/devices_ok.json` sit near Loveland CO and carry `info.coords.elevation`, and `acis/stnmeta__*.json` (03 section 10) feed `ReplayAcis`, so the local stack and the e2e connect spec can suggest Northern Colorado Regional Airport (`USW00094035`) without network access. `AWN_MODE=replay` also replays ACIS (no separate switch). A reference station whose `sid` has no `StnData` fixture (for example a freshly picked baseline) gets an empty replay result: the `reference_sync` job succeeds with no rows and logs once; it is not an error and not retried (03 section 10), so the baseline shows "history not loaded" locally until a fixture exists.
 

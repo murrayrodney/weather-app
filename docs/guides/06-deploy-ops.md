@@ -12,7 +12,7 @@ Owns:
 - `ops/backup/` image and scripts, AWS S3/IAM, restore procedure.
 - Monitoring, secrets inventory and rotation, runbooks, cost.
 
-Does not own: Rust code, `backend/Dockerfile` (02), SQL for roles/schema/exposure check (04), the Compose stack and `make` targets (05), the SPA, CSP source lists and `security-headers.json` (01).
+Does not own: Rust code, `backend/Dockerfile` (03, core milestone), SQL for roles/schema/exposure check (04), the Compose stack and `make` targets (05), the SPA, CSP source lists and `security-headers.json` (01).
 
 **Rule for implementing agents** (conventions, "Agents and production"): write files and test locally in Compose. Never run production-changing commands (Fly secrets or deploys, Supabase auth probes, admin CLI, restores against production) and never hold production secrets. Every "Rodney" step in sections 7, 8, 9.5, 15 is a human action. Agents verify with `actionlint`, `shellcheck`, `docker build`, `flyctl config validate` where it needs no token, and `ops/backup/test.sh`.
 
@@ -62,7 +62,7 @@ App names are literal strings. They appear in `ops/fly/*.toml` (`app = ...`), `o
 
 | From | Contract used here |
 | --- | --- |
-| 02 (Dockerfile) | Final image distroless nonroot (no shell, no `sh -c`); binaries `/usr/local/bin/{api,poller,admin}`; Docker build context `backend/`. **CA (conventions):** the Dockerfile does `COPY certs/ /etc/ssl/app-certs/` from the `backend/` context, `backend/certs/.keep` is committed so builds work before the CA exists, and production config refuses to start if `/etc/ssl/app-certs/supabase-ca.crt` is missing. 06 supplies the file (runbook step 1b: download and commit `backend/certs/supabase-ca.crt`). |
+| 03 (Dockerfile, core milestone) | Final image distroless nonroot (no shell, no `sh -c`); binaries `/usr/local/bin/{api,poller,admin}`; Docker build context `backend/`. **CA (conventions):** the Dockerfile does `COPY certs/ /etc/ssl/app-certs/` from the `backend/` context, `backend/certs/.keep` is committed so builds work before the CA exists, and production config refuses to start if `/etc/ssl/app-certs/supabase-ca.crt` is missing. 06 supplies the file (runbook step 1b: download and commit `backend/certs/supabase-ca.crt`). |
 | 02 | `GET /api/health` unauthenticated and exempt from the signature check. If `NETLIFY_PROXY_SECRET` is set, other requests need a valid `x-nf-sign`. Responses set `Cache-Control: no-store`/`nosniff`. `API_BIND_ADDR` default `0.0.0.0:8080`. |
 | 03 | No inbound port; healthcheck pings per 03 section 3.5; `poller run-job awn_backfill --station <uuid>`; `poller run-job credential_reencrypt`; one-offs take the same advisory locks and the `awn:app:poller` / `awn:key:<credential_id>` rate gates. |
 | 04 | `ops/db/bootstrap/roles.sql` (passwords via env + `\getenv`), `ops/db/bootstrap/auth_access.sql` (as `postgres`, once, after GoTrue created `auth`; proposals/03, accepted), `ops/db/checks/exposure.sh <url>` (run as `app_ci_check`), `ops/db/checks/size.sql` (400 MB threshold; also used by backup), `ops/db/checks/supabase_smoke.sh`, `ops/db/tests/run.sh`. `app_backup` has an explicit `SELECT` on `app._sqlx_migrations`. Role connection limits: `app_api` 20, `app_poller` 15, `app_migrator` 10, `app_backup` 3, `app_ci_check` 2. |
@@ -312,7 +312,7 @@ Reference 04 for SQL and 04's hosted-verification items. Tick each in order.
 4. Auth → URL Configuration: Site URL = the Netlify production URL (the Netlify site already exists, runbook step 2). **Redirect URLs: leave empty** (decided Oct 7: no flow uses a redirect; password sign-in and `verifyOtp` are direct calls, so Netlify deploy previews sign in without any allow-list entry and the earlier preview wildcard is gone).
 5. **Password settings check (required, proposal 05; you set these while creating the project, nothing is verified beforehand):** in the dashboard find and set each of these, and write what you found in the setup notes (04 section 8.1 lists the same intent):
    - **Secure password change / reauthentication by email: Off.** If it is on, a signed-in person with a session older than 24 hours cannot change their password without an emailed nonce, and nothing can send email.
-   - **Require current password when changing it: Off.** If it is on, a person with a reset link could not choose a new password without knowing the old one.
+   - **Require current password when changing it: Off.** If it is on, a password change from a normal signed-in session (the `/account` form) is refused with `current_password_required` (it does not affect set-password links, verified on GoTrue v2.197.0). If it cannot be turned off, the fallback is that the `/account` change-password flow must send the current password (01 must then add that field), not proposal 05 option (b1).
    - **Minimum password length: 12** (Auth → Sign In / Providers → Email, or Password security), and note whether leaked-password protection is available (Pro only; expected not available).
    - **If either switch cannot be turned off on the free plan, stop and tell the coding agent:** the fallback is proposal 05 option (b1) (a temporary password handed over by Rodney and a "change your password" prompt; `admin invite` then sets an initial random password instead of printing a link). If the minimum length cannot be raised, the web form and `admin` keep the 12-character rule and the gap is written into the security notes (04 section 8.1).
    - Auth → SMTP: **leave custom SMTP unconfigured** (decided Oct 7: nothing in the product sends email; family members get set-password links from `admin invite` / `admin reset-link`, sent by hand). Do not add an email provider or SES now. **Growth path (documented, not built):** if the family grows beyond a few people, configure custom SMTP (Amazon SES is acceptable then: a verified sender domain with SPF/DKIM and production access out of the SES sandbox, [Supabase SMTP](https://supabase.com/docs/guides/auth/auth-smtp)), point the recovery and invite email templates at `https://<site>/set-password#token_hash={{ .TokenHash }}&type=recovery`, and ask the coding agent for the small code paths (04 section 8.1a). The built-in sender only delivers to organization members at about 2 messages per hour, so it is not an option for family.
@@ -537,7 +537,7 @@ CI runs the make targets (`check-local-only test-db test-backend` here, `test-we
 
 **Path filters (for speed; minutes are unlimited on a public repo).** `backend.yml` and `web.yml` have no `pull_request` trigger of their own and no `paths:`; they are reusable (`workflow_call`) workflows. On pull requests `ci.yml` (11.2a) decides with a `changes` job which of them to call (backend or ops files for `backend.yml`; `web/` or the Caddy headers file for `web.yml`), so a docs-only or web-only PR runs no backend jobs. On `main`, `deploy.yml` has its own `changes` job (11.4). Because a workflow that never triggers reports nothing, the required check lives in `ci.yml`, which triggers on every pull request.
 
-**Caches.** `Swatinem/rust-cache` caches the host-side lint job. The Docker-based `tests` job restores the Compose test project's cargo registry, target directory and tools from `actions/cache` (keys: `hashFiles('backend/Cargo.lock', 'backend/.sqlx-cli-version')`, restore-keys on the prefix), by setting `CARGO_REGISTRY_SRC`, `CARGO_TARGET_SRC` and `CARGO_TOOLS_SRC` to relative paths under `.ci-cache/` (05's test overlay turns those named volumes into bind mounts when the variables are set). The web job caches npm through `actions/setup-node` (`cache: npm`). Cache hits cut a typical backend run from roughly 20 to 25 minutes (cold) to roughly 8 to 12.
+**Caches.** `Swatinem/rust-cache` caches the host-side lint job. The Docker-based `tests` job restores the Compose test project's cargo registry and target directory from `actions/cache` (keys: `hashFiles('backend/Cargo.lock')`, restore-keys on the prefix), by setting `CARGO_REGISTRY_SRC` and `CARGO_TARGET_SRC` to relative paths under `.ci-cache/` (05's test overlay turns those named volumes into bind mounts when the variables are set). The web job caches npm through `actions/setup-node` (`cache: npm`). Cache hits cut a typical backend run from roughly 20 to 25 minutes (cold) to roughly 8 to 12.
 
 **Minutes are not a constraint.** The repository is public, so standard Linux runner minutes are free and unlimited; there is no monthly budget to track. For reference a backend-touching run takes about 20 to 25 minutes cold and 8 to 12 warm, a web-touching run about 8, and a deploy run on `main` about 30. Path filters and caches stay purely to keep feedback fast, and docs-only pushes and PRs run nothing. Every job still sets `timeout-minutes` so a hung build cannot sit for the 6-hour default.
 
@@ -578,15 +578,14 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .ci-cache
-          key: cargo-compose-${{ hashFiles('backend/Cargo.lock', 'backend/.sqlx-cli-version') }}
+          key: cargo-compose-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: cargo-compose-
-      - run: mkdir -p .ci-cache/registry .ci-cache/target .ci-cache/tools
+      - run: mkdir -p .ci-cache/registry .ci-cache/target
       - run: make init
       - name: backend tests (the web tests live in web.yml and run only when web/ changes)
         env:
           CARGO_REGISTRY_SRC: ./.ci-cache/registry
           CARGO_TARGET_SRC: ./.ci-cache/target
-          CARGO_TOOLS_SRC: ./.ci-cache/tools
         run: make check-local-only test-db test-backend
       - name: production files contain no demo values
         run: |
@@ -791,7 +790,6 @@ jobs:
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
         with: { workspaces: backend }
       - run: cargo build --release --manifest-path backend/Cargo.toml --locked -p admin
-        env: { SQLX_OFFLINE: "true" }
       - id: sum
         run: echo "sha256=$(sha256sum backend/target/release/admin | awk '{print $1}')" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -1219,8 +1217,8 @@ Target: the **drill** restores into a local Compose database **on Rodney's lapto
 
 ## 19. Changes other guides must make (for this guide to hold)
 
-- **02:** Dockerfile `COPY certs/ /etc/ssl/app-certs/` (conventions); `cargo sqlx prepare --workspace --check` must run inside `make test-backend` (06's CI no longer runs a host-side copy).
+- **02:** Dockerfile `COPY certs/ /etc/ssl/app-certs/` (conventions). (Superseded: there is no `cargo sqlx prepare --check` step; queries are runtime `sqlx::query`, 02 4.12.)
 - **04:** `roles.sql` takes the five `*_PASSWORD_VERIFIER` values; the roles section should mention the session-pooler alternative for an IPv4-only operator; `exposure.sh` runs as `app_ci_check` and inside `make test-db`; `size.sql` must run as `app_backup` and exit non-zero above 400 MB; `app_backup` has `SELECT` on `app._sqlx_migrations`; the admin client sends `sb_secret_` only in the `apikey` header; `admin invite` and `admin reset-link` create the login / link without sending any email and print the set-password link once (check 14 expects no email at all); settle `admin invite --admin`; optionally `admin migrate --target <version>`; `app_auth.backup_users()` and `admin restore-auth-users` exist (decided Oct 7; 04 6.5 and 10.2).
-- **05:** the test overlay's cargo volumes take `CARGO_REGISTRY_SRC` / `CARGO_TARGET_SRC` / `CARGO_TOOLS_SRC` (done in 05) so CI can cache them; `backend/demo-fingerprints.txt` with `<sha256>  <NAME>` lines covering every committed demo value (HS256 secret, anon and service keys, HPKE pair, five role passwords); no Compose `backup` service or `make backup` target.
+- **05:** the test overlay's cargo volumes take `CARGO_REGISTRY_SRC` / `CARGO_TARGET_SRC` (done in 05; the tools volume and `SQLX_OFFLINE` were removed) so CI can cache them; `backend/demo-fingerprints.txt` with `<sha256>  <NAME>` lines covering every committed demo value (HS256 secret, anon and service keys, HPKE pair, five role passwords); no Compose `backup` service or `make backup` target.
 - **01:** `headers.mjs check` must tolerate the `<project-ref>` placeholder before the Supabase project exists (or fail only when `CONTEXT=production`); `make test-web` runs the production-build guard scripts so 06 does not.
 - **00-conventions:** `DB_SIZE_ALERT_MB`, `BACKUP_OUTPUT_DIR` and `HEALTHCHECK_URL_AWN_BACKFILL` are unused by this design; drop `NETLIFY_BUILD_HOOK_URL` (no Netlify credential in GitHub) and add `BACKUP_INCLUDE_AUTH` / `BACKUP_S3_CONDITIONAL` (backup-local) if it lists backup variables.

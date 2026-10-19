@@ -119,7 +119,7 @@ Changes `01-web.md` must pick up (new or changed since 01 was written):
 
 - 401 `unauthorized` always means "sign out and go to login". A 503 `auth_unavailable` means "retry later", NOT sign out.
 - 403 `account_inactive` -> show a "no access" screen.
-- New error codes: `request_timeout` (408), `payload_too_large` (413), `overloaded` (503, `Retry-After`), `auth_unavailable` (503), `upstream_busy` (503, `Retry-After`), `upstream_unavailable` (502), `invalid_key`, `unknown_device`, `timezone_required` (422), `device_already_registered` and `conflict` (409). 429 always has `Retry-After`. REMOVED: the per-route cost weights from earlier drafts; the per-user rate is flat (120/min, burst 40). Every `/api/v1` request is aborted with 408 `request_timeout` after 25 s, so the web client timeout should be at least 25 s and treat 408 as retryable.
+- New error codes: `request_timeout` (408), `payload_too_large` (413), `overloaded` (503, `Retry-After`), `auth_unavailable` (503), `upstream_busy` (503, `Retry-After`), `upstream_unavailable` (502), `invalid_key`, `unknown_device`, `timezone_required` (422), `device_already_registered` and `conflict` (409), `method_not_allowed` (405; a programming error in the client, shown as the generic message). 429 always has `Retry-After`. REMOVED: the per-route cost weights from earlier drafts; the per-user rate is flat (120/min, burst 40). Every `/api/v1` request is aborted with 408 `request_timeout` after 25 s, so the web client timeout should be at least 25 s and treat 408 as retryable.
 - `GET /stations/{id}/observations` and `GET /rollups/daily` are DEFERRED (do not call them).
 - `GET /ytd`: `year` is REQUIRED. MEANING CHANGE: `missing_days` is now an object `{rain, gdd}` (on `current` and on each `prior_years[]` entry) and `bands.years_included` is an object `{rain, gdd}` (earlier drafts had plain numbers). `current` has `first_date`, `last_date`, `last_complete_date`; the open current day appears as a partial value. `prior_years[]` may include years later than `year`. Any series array may be `null`. **Oct 7 change:** GDD is computed at query time; new optional query parameters `gdd_method`, `gdd_base`, `gdd_start`; the response echoes them in a top-level `gdd` object; the `gdd_overlay` object and the `gdd_method_mismatch` state are REMOVED (station and baseline always share the parameters); each station's `baseline` gains `history_loaded` (false while the baseline's history is still loading).
 - **Oct 7 change (proposals/06):** `GET /stations/{id}/forecast/history` is REMOVED (no stored forecasts). New routes `GET /stations/{id}/forecast` and `GET /stations/{id}/forecast/changes` (5.6, 5.6a); the `precip_6h_in` variable and 6-hourly windows are gone.
@@ -143,7 +143,7 @@ backend/crates/api/
   src/auth/{mod.rs,jwks.rs,token.rs,user.rs,guard.rs}
   src/access.rs            # ViewableStation(s), ViewableStationPath, ViewableStationsQuery
   src/extract.rs           # FollowerId and other non-station extractors
-  src/limits.rs            # in-memory per-user limiters (general, search, baseline; 4.9)
+  src/limits.rs            # in-memory per-user limiters (general, search, baseline, forecast; 4.9)
   src/baseline.rs          # ACIS candidate filter, ranking and the in-memory cache (4.15)
   src/audit.rs
   src/telemetry.rs
@@ -200,7 +200,7 @@ pub struct ApiEnv {
 2. Local: exactly one of `JWT_HS256_SECRET` (>= 32 bytes) or `SUPABASE_JWKS_URL`. With `JWT_HS256_SECRET`, `SUPABASE_URL` must equal `http://localhost:8000` exactly (issuer `http://localhost:8000/auth/v1`). The test-project value `SUPABASE_URL=http://auth:9999` is therefore only used by tests that build `ApiConfig::for_test` and give the issuer explicitly.
 3. `NETLIFY_PROXY_SECRET` is optional everywhere (warn at startup in production when unset).
 
-`ApiConfig::for_test(..)` and the extra test routers exist only under `cfg(any(test, feature = "test-support"))`. `api/Cargo.toml` declares `[features] test-support = ["core/test-support"]` and dev-dependencies on itself and on core with the features on (`api = { path = ".", features = ["test-support"] }`, `core = { workspace = true, features = ["test-support", "testdb"] }`, never `decrypt`), so plain `cargo test -p api` works. `backend/Cargo.toml` sets `resolver = "2"` in `[workspace]` so dev-dependency features never reach release builds. `make test-backend` runs the conventions' two steps: `cargo test --workspace --exclude admin --features api/test-support`, then `cargo test -p admin --features compose-tests -- --test-threads=1`. Violations print variable NAMES only and exit non-zero. `ApiConfig` and every struct with a secret implement `Debug` manually (`[redacted]`); secrets are `SecretString`.
+`ApiConfig::for_test(..)` and the extra test routers exist only under `cfg(any(test, feature = "test-support"))`. `api/Cargo.toml` declares `[features] test-support = ["famweather-core/test-support"]` and dev-dependencies on itself and on the core crate with the features on (`api = { path = ".", features = ["test-support"] }`, `famweather-core = { workspace = true, features = ["test-support", "testdb"] }`, never `decrypt`), so plain `cargo test -p api` works. `backend/Cargo.toml` sets `resolver = "2"` in `[workspace]` so dev-dependency features never reach release builds. `make test-backend` runs the conventions' two steps: `cargo test --workspace --exclude admin --features api/test-support`, then `cargo test -p admin --features compose-tests -- --test-threads=1`. Violations print variable NAMES only and exit non-zero. `ApiConfig` and every struct with a secret implement `Debug` manually (`[redacted]`); secrets are `SecretString`.
 
 ### 4.2 Application state and router shape
 
@@ -210,7 +210,7 @@ pub struct AppState {
     pub cfg: Arc<ApiConfig>,
     pub jwt: Arc<TokenVerifier>,
     pub awn: Arc<dyn core::awn::AwnApi>,
-    pub limiters: Arc<UserLimiters>,                       // general, search, baseline (4.9)
+    pub limiters: Arc<UserLimiters>,                       // general, search, baseline, forecast (4.9)
     pub acis: Arc<dyn core::acis::AcisApi>,                // LiveAcis(5 s) or ReplayAcis (replay mode)
     pub baseline_cache: Arc<baseline::BaselineCache>,      // 4.15
     pub cred_pubkey: core::crypto::CredentialPublicKey,   // from core::crypto::parse_public_key(CREDENTIALS_PUBLIC_KEY)
@@ -409,7 +409,7 @@ Body: `{ "api_key": "...", "devices": [ { "mac": "AA:BB:CC:DD:EE:FF", "name": "o
 
 Use `core::crypto` exactly as specified in `04-database.md` section 9 (owned by 04; do not redefine): `encrypt_credential(&CredentialPublicKey, key_version: i16, credential_id: Uuid, owner_id: Uuid, &SecretString) -> Result<EncryptedCredential, CryptoError>` (public key parsed with `parse_public_key`), HPKE base mode, X25519/HKDF-SHA256/AES-256-GCM, `info` `b"family-weather/credential/v1"`, AAD `credential_id || owner_id` (16 raw bytes each), `key_version = CREDENTIALS_KEY_VERSION`.
 
-`decrypt_credential` is behind `core` feature `decrypt`, enabled only by `poller` and tests. CI check: `cargo tree -p api -e normal,build,features -f '{p} {f}'` must not show `decrypt` for `core` (dev-dependency edges are excluded on purpose). The round-trip decrypt test lives in `core` (04's crypto tests), not in `api`; the `api` crate has no dev-dependency that enables `decrypt`.
+`decrypt_credential` is behind `core` feature `decrypt`, enabled only by `poller` and tests. CI check: `cargo tree -p api -e normal,build,features -f '{p} {f}'` must not show `decrypt` for `famweather-core` (dev-dependency edges are excluded on purpose). The round-trip decrypt test lives in `core` (04's crypto tests), not in `api`; the `api` crate has no dev-dependency that enables `decrypt`.
 
 ### 4.8 Conventions for all routes
 
@@ -424,8 +424,9 @@ In-memory per-user limiters, `limits.rs` (`UserLimiters`, each a `governor::Defa
 | `general` | 120 per minute, burst 40 | every `/api/v1` request, inside `auth::guard` right after token verification and before any database access (4.4); every request costs 1 |
 | `search` | 30 per minute, burst 10 | additionally on `GET /users/search` (5.11); a typing user with a 300 ms debounce stays under it, a script enumerating names does not |
 | `baseline` | 6 per minute, burst 3 | additionally on `GET .../baseline/candidates` and `PUT .../baseline` (5.10), because a cache miss spends ACIS capacity |
+| `forecast` | 20 per minute, burst 10 | additionally on `GET .../forecast` and `GET .../forecast/changes`, checked before the station lookup (a cache miss spends upstream Open-Meteo capacity) |
 
-The `search` and `baseline` limiters are checked in the route handler after `AuthUser` exists and **before any database or ACIS work**; over the limit -> 429 `rate_limited` with `Retry-After`, the same envelope as the general limiter (they are the same type with different quotas, so their behaviour is identical and tested the same way). Connect routes additionally have the durable limits in 4.6.2. The limiters are in memory because the API is a single machine (P3) and reset if it auto-stops (a restart gives a caller one fresh burst, which is acceptable for these low-cost routes); the sensitive limits (connect, the AWN gates, the ACIS gate) are in Postgres.
+The `search`, `baseline` and `forecast` limiters are checked in the route handler after `AuthUser` exists and **before any database or ACIS work**; over the limit -> 429 `rate_limited` with `Retry-After`, the same envelope as the general limiter (they are the same type with different quotas, so their behaviour is identical and tested the same way). Connect routes additionally have the durable limits in 4.6.2. The limiters are in memory because the API is a single machine (P3) and reset if it auto-stops (a restart gives a caller one fresh burst, which is acceptable for these low-cost routes); the sensitive limits (connect, the AWN gates, the ACIS gate) are in Postgres.
 
 Unauthenticated requests are never keyed by IP. Flood protection: `LoadShed` + `GlobalConcurrencyLimit(64)`, the overall 25 s timeout, 16 KiB body limit, token failures cost no DB access, the JWKS refetch cooldown, the health query's 2 s timeout. Evict idle limiter keys every 10 minutes (`retain_recent`, `shrink_to_fit`). Never read `X-Forwarded-For`, `Forwarded`, `X-Real-IP` or `Fly-Client-IP` for any security decision.
 
@@ -435,7 +436,7 @@ When `NETLIFY_PROXY_SECRET` is set (conventions: `signed = "NETLIFY_PROXY_SECRET
 
 ### 4.11 Errors, redaction, logging (S7)
 
-- Shared codes (conventions): `unauthorized` 401, `account_inactive` 403, `forbidden` 403, `not_found` 404, `rate_limited` 429, `validation_failed` 422. API-specific: `invalid_key` 422, `unknown_device` 422, `not_a_candidate` 422, `timezone_required` 422, `device_already_registered` 409, `conflict` 409, `request_timeout` 408, `payload_too_large` 413, `overloaded` 503, `auth_unavailable` 503, `upstream_busy` 503, `upstream_unavailable` 502, `internal` 500.
+- Shared codes (conventions): `unauthorized` 401, `account_inactive` 403, `forbidden` 403, `not_found` 404, `rate_limited` 429, `validation_failed` 422. API-specific: `invalid_key` 422, `unknown_device` 422, `not_a_candidate` 422, `timezone_required` 422, `device_already_registered` 409, `conflict` 409, `method_not_allowed` 405 (a known path with the wrong method; the `Allow` header is kept), `request_timeout` 408, `payload_too_large` 413, `overloaded` 503, `auth_unavailable` 503, `upstream_busy` 503, `upstream_unavailable` 502, `internal` 500.
 - Body always `{"error":{"code","message"}}` with fixed static messages, never echoing input. `internal` logs the cause server-side and returns "Something went wrong." plus the `x-request-id` header.
 - Secret handling:
   - Secrets are `SecretString`; `#[derive(Debug)]` is forbidden on `ConnectValidateRequest`, `ConnectSaveRequest`, `ApiConfig`, `TokenVerifier` (grep test, 7.4).
@@ -451,7 +452,7 @@ Use `core::db` with a `PoolSpec { max: 5, min: 0, acquire_timeout: 5 s, idle_tim
 
 Connect from Fly via the direct IPv6 host (`db.<ref>.supabase.co`) or Supavisor in session mode (port 5432, username `app_api.<project-ref>`), never transaction mode (port 6543 refused at startup), in the same region as Fly (C3). The API holds no session-level locks (the AWN gate is a table reservation), but named prepared statements still require session semantics; keep sqlx's default statement cache (100). Do not set `statement_cache_capacity(0)` to tolerate transaction mode without a design decision.
 
-The API does not run migrations. Queries use `sqlx::query!`/`query_as!` with committed `.sqlx/` (`SQLX_OFFLINE=true` in Docker and CI; CI `cargo sqlx prepare --workspace --check`). NUMERIC columns are cast explicitly (`lat::float8`, `$1::float8`); no `rust_decimal`. Dynamic SQL strings are forbidden.
+The API does not run migrations. Queries use runtime `sqlx::query`/`query_scalar` with bind parameters only (project-wide decision, all crates): no `query!` macros, no committed `.sqlx/` data, no `cargo sqlx prepare` step. SQL text is a static string literal; nothing is built with `format!` or concatenation. NUMERIC columns are cast explicitly (`lat::float8`, `$1::float8`); no `rust_decimal`.
 
 ### 4.13 Audit log (S16)
 
@@ -461,7 +462,7 @@ The API does not run migrations. Queries use `sqlx::query!`/`query_as!` with com
 
 `backend/Dockerfile` is created by 03's core milestone (conventions: one image, binaries present only for crates that exist); this guide does NOT create it. When `crates/api` lands, add to the existing Dockerfile and its CI checks:
 
-1. The `api` build step in the `builder` stage: `cargo build --release --locked -p api`, run separately from `-p poller -p admin` so `decrypt` (enabled by `poller`) cannot leak into `api` through feature unification, and copy `/usr/local/bin/api` into the final stage. `.sqlx/` must include the API's query data (`cargo sqlx prepare --workspace`).
+1. The `api` build step in the `builder` stage: `cargo build --release --locked -p api`, run separately from `-p poller -p admin` so `decrypt` (enabled by `poller`) cannot leak into `api` through feature unification, and copy `/usr/local/bin/api` into the final stage. (There is no `.sqlx/` data: queries are runtime `sqlx::query`, 4.12.)
 2. Final stage requirements the API depends on (already specified by conventions and 03; verify, do not redefine): distroless `cc-debian12:nonroot` (no shell, uid 65532), `COPY certs/ /etc/ssl/app-certs/` (CA at `/etc/ssl/app-certs/supabase-ca.crt`; production config refuses to start if the file named by `sslrootcert` is missing), default command overridable (`famweather-api` runs `api`), no fixtures in the image (replay fixtures only via the volume at `FIXTURES_DIR`), read-only root filesystem works.
 3. API image checks added to CI (no shell in the image): `docker create --name img-check <image>`; `docker cp img-check:/usr/local/bin/api -` exists; when `backend/certs/supabase-ca.crt` exists in the repo, `docker cp img-check:/etc/ssl/app-certs/supabase-ca.crt -` hashes equal to it; `docker image inspect` shows user 65532; the feature-isolation `cargo tree` check from 4.7 (fails on `decrypt`, `test-support`, `testdb` in `api`).
 4. `api healthcheck` is the container health command for Compose; Fly uses HTTP `GET /api/health`. `api` listens on `ApiEnv.bind_addr`; SIGTERM -> 25 s graceful shutdown.
@@ -784,7 +785,7 @@ Each task also requires `cargo fmt --check && cargo clippy --workspace --all-tar
 13. **Forecast and forecast changes** (5.6, 5.6a, 5.6b): `OpenMeteoApi` trait with `LiveOpenMeteo`/`ReplayOpenMeteo`, TTL cache with single flight and stale-if-error, semaphore and token bucket, percentile code, both routes, recorded fixtures and the recorder example (7.9). Done when the tests of 7.9 pass, hidden stations get 404 without any upstream call, and the persona matrix passes for both routes.
 14. **Image: api build step and checks** (4.14; the Dockerfile itself exists from 03's core milestone). Done when the existing image builds with `api` included, `api` runs as uid 65532 with `--read-only`, `api healthcheck` works, a start with empty env exits non-zero without printing values, and the CI image checks of 4.14 item 3 pass.
 15. **Compose integration** with 05: `api` healthy and reachable at `http://localhost:8000/api/health` through Caddy; 7.5 passes.
-16. **CI hooks** (with 06): `cargo sqlx prepare --workspace --check`, the decrypt-feature check, `cargo deny`/`cargo audit`, image check. Done when a PR run is green.
+16. **CI hooks** (with 06): the decrypt-feature check, `cargo deny`/`cargo audit`, image check. Done when a PR run is green.
 17. **After first deploy: Netlify signature layer** (4.10). Done when tests show: unset secret disables it; set secret -> missing/invalid/expired/wrong-`iss` `x-nf-sign` is 403 on `/api/v1/*` and health stays open.
 18. **Deferred (post-v1): observations and daily rollups** (5.4a), when 01-web needs them.
 
@@ -904,7 +905,7 @@ Seeded users (04 12.1): Rodney (admin), Alex, Sam, Dana, Pat, Casey (inactive). 
 Seed one station and one baseline with the same known `(tmax, tmin)` rows (for example 95/60, 45/30, 70/40 on three consecutive days; plus one day with NULL `tmax_f`).
 
 - Defaults: no GDD parameters -> `gdd` echo is `{"method":"simple_avg","base_f":50,"start":"04-01"}` and the cumulative values are 27.5, 27.5, 32.5, 32.5 (the fourth, NULL-temperature day adds 0 and counts as missing).
-- `gdd_method=clamped_50_86` -> 23.0, 23.0, 33.0, 33.0; `gdd_base=45` with `simple_avg` -> 32.5 for the first day; `gdd_start=01-01` extends the GDD series back to 01-01 (zeros until data) while rain keeps its `start`; the response `gdd.start` equals the parameter.
+- `gdd_method=clamped_50_86` -> 23.0, 23.0, 33.0, 33.0; `gdd_base=45` with `simple_avg` -> 32.5 for the first day; `gdd_start=01-01` moves the GDD accumulation window start to 01-01 (the baseline's years accumulate from 01-01 and count missing days from there), but the station's own series still begins at its FIRST rollup row on or after that date (5.5: a station installed mid-season starts its line on its first day), while rain keeps its `start`; the response `gdd.start` equals the parameter.
 - Invalid values -> 422 `validation_failed`: `gdd_method=avg_50`, `gdd_base=31`, `gdd_base=71`, `gdd_base=abc`, `gdd_start=13-01`, `gdd_start=11-01` with `end=10-31`; an unknown extra key.
 - Same parameters on both sides: for identical station and baseline rows the current-year `gdd_cum` and the matching prior-year `gdd_cum` are equal for every method and base; there is no `gdd_overlay` and no mismatch state in the response.
 - No backfill: changing only the query parameters, with unchanged rows, changes the output; `daily_rollups` and `reference_daily` have no `gdd` columns (a catalog assertion in 04's tests).
@@ -963,7 +964,7 @@ Conflicts and gaps:
 - Baseline assignment is decided (Oct 7): ACIS suggestion at connect time, owner confirms or changes it (5.10); until set the baseline is `null`. Assumptions to confirm on the first recording: ACIS `StnMeta` response shape as in 03 7.5a; `USW` plus an ICAO/FAA id is a good "airport" test for every region the family uses; AWN returns elevation under `info.coords.elevation`. Not built: choosing a baseline for a station that is not yours, clearing a baseline, a user-typed station id.
 - Forecast data (closed Oct 7, proposals/06, option A): no stored forecasts; live forecast + ensemble bands and the day-offset change view come from Open-Meteo through this API with an in-memory cache (F2 resolved, Q9 closed). Sequenced last (task 13). Choices made here that Rodney can revisit: `gfs_seamless` pinned for the deterministic series and the change view; `ecmwf_ifs025` alone for bands; local wall-clock days; 30-minute and 2-hour TTLs. Accepted risks: dependence on Open-Meteo's free archives and terms (5.6b). Fallback if the archives disappear: a small deterministic snapshot table (proposal option B), added by a new migration.
 - The `app_auth` definer-function design is accepted (proposals/03); that the function can read `auth.sessions` on hosted Supabase is to be confirmed by the required pre-build scratch-project check. Only if that check fails does option (c) drop the per-request session check and downgrade S2.
-- Percentile set (10, 25, 50, 75, 90), `PRIOR_YEARS = 5`, eligibility rule `missing_days <= 7`, >= 10 eligible years for bands, the rate limits (general 120/min burst 40; search 30/min burst 10; baseline 6/min burst 3), connect limits (5/min, 20/hour), the ACIS radius (60 miles), staleness (30 days) and minimum record (10 years): configurable assumptions, not product decisions. The Loveland baseline (FNL, `USW00094035`) has a record from 2011-10-01 only, so its bands rest on about 14 seasons.
+- Percentile set (10, 25, 50, 75, 90), `PRIOR_YEARS = 5`, eligibility rule `missing_days <= 7`, >= 10 eligible years for bands, the rate limits (general 120/min burst 40; search 30/min burst 10; baseline 6/min burst 3; forecast 20/min burst 10), connect limits (5/min, 20/hour), the ACIS radius (60 miles), staleness (30 days) and minimum record (10 years): configurable assumptions, not product decisions. The Loveland baseline (FNL, `USW00094035`) has a record from 2011-10-01 only, so its bands rest on about 14 seasons.
 - Disconnecting a credential or station is not specified; not implemented.
 - Netlify proxy: `deploy_context` is not checked, by decision (previews are on and proxy to the production API; 4.10).
 - If the API ever runs on more than one machine, the in-memory limiter must move to shared storage (connect limits and the AWN gate are already in Postgres).
