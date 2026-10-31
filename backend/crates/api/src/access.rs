@@ -26,6 +26,19 @@ pub struct ViewableStation {
 }
 
 impl ViewableStation {
+    /// Unit-test constructor (no database, never in a release build): the replay tests need a zone and coordinates.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_test(timezone: Tz, lat: f64, lon: f64) -> Self {
+        Self {
+            id: Uuid::nil(),
+            owner_id: Uuid::nil(),
+            timezone,
+            reference_station_id: None,
+            lat,
+            lon,
+        }
+    }
+
     pub fn id(&self) -> Uuid {
         self.id
     }

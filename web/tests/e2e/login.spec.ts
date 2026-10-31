@@ -1,8 +1,13 @@
 import { expect, test } from '@playwright/test';
 import { DEMO_PASSWORD, UNINVITED_EMAIL, USER_A_EMAIL } from '../helpers/env';
-import { json, loginUi } from '../helpers/api';
+import { json, loginUi, mockForecasts } from '../helpers/api';
 
 const FAILED = "That email and password didn't work.";
+
+// Many UI sign-ins as alex in this file: keep the dashboard's per-station forecast calls off the general per-user limiter.
+test.beforeEach(async ({ page }) => {
+  await mockForecasts(page);
+});
 
 async function fill(page: import('@playwright/test').Page, email: string, password: string) {
   await page.getByLabel('Email').fill(email);

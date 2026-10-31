@@ -10,6 +10,7 @@ use crate::access::ViewableStationPath;
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{NoQuery, Params};
+use crate::openmeteo::accumulation::{running_sum, start_step};
 use crate::openmeteo::changes::{self, LEADS};
 use crate::openmeteo::percentiles::{daily, hourly, member_days};
 use crate::openmeteo::{EnsembleRaw, ForecastRaw, OmError, ENSEMBLE_MEMBERS};
@@ -57,7 +58,20 @@ fn iso(t: &[DateTime<Utc>]) -> Vec<String> {
         .collect()
 }
 
-fn deterministic(f: &ForecastRaw) -> Value {
+/// Whole numbers (rounded), `null` when missing.
+fn ints(v: &[Option<f64>]) -> Vec<Value> {
+    v.iter()
+        .map(|x| x.map_or(Value::Null, |x| json!(x.round() as i64)))
+        .collect()
+}
+
+fn utc(t: DateTime<Utc>) -> String {
+    t.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+/// `now` decides where the precipitation totals start (02 5.6): they are computed per request, not cached.
+fn deterministic(f: &ForecastRaw, now: DateTime<Utc>) -> Value {
+    let accum = running_sum(&f.precip, start_step(&f.times, now));
     json!({
         "model": "gfs_seamless",
         "hourly": {
@@ -65,6 +79,17 @@ fn deterministic(f: &ForecastRaw) -> Value {
             "temperature_f": opt(&f.temp, 1),
             "precip_in": opt(&f.precip, 3),
             "prob_precip": f.prob.iter().map(|x| x.map_or(Value::Null, |x| json!(x.round() as i64))).collect::<Vec<_>>(),
+            "precip_accum_in": opt(&accum, 3),
+            "apparent_temp_f": opt(&f.apparent_f, 1),
+            "dew_point_f": opt(&f.dew_point_f, 1),
+            "cloud_pct": ints(&f.cloud_pct),
+            "humidity_pct": ints(&f.humidity_pct),
+            "pressure_inhg": opt(&f.pressure_inhg, 2),
+            "wind_mph": opt(&f.wind_mph, 1),
+            "wind_dir_deg": ints(&f.wind_dir_deg),
+            "gust_mph": opt(&f.gust_mph, 1),
+            "weather_code": ints(&f.weather_code),
+            "snow_in": opt(&f.snow_in, 3),
         },
         "daily": f.daily.iter().map(|d| json!({
             "date": d.date,
@@ -72,6 +97,10 @@ fn deterministic(f: &ForecastRaw) -> Value {
             "tmin_f": d.tmin.map(|x| r(x, 1)),
             "precip_in": d.precip.map(|x| r(x, 3)),
             "prob_precip_max": d.prob_max.map(|x| x.round() as i64),
+            "weather_code": d.weather_code.map(|x| x.round() as i64),
+            "snow_in": d.snow.map(|x| r(x, 3)),
+            "sunrise": d.sunrise.map(utc),
+            "sunset": d.sunset.map(utc),
         })).collect::<Vec<_>>(),
     })
 }
@@ -85,7 +114,8 @@ fn triple(p: [f64; 3], places: i32) -> Value {
     json!({ "p10": r(p[0], places), "p50": r(p[1], places), "p90": r(p[2], places) })
 }
 
-fn ensemble(e: &EnsembleRaw, tz: chrono_tz::Tz) -> Value {
+/// The ensemble total is accumulated per member first, then percentiles are taken (never the reverse).
+fn ensemble(e: &EnsembleRaw, tz: chrono_tz::Tz, now: DateTime<Utc>) -> Value {
     let steps = e.times.len();
     let members: Vec<_> = e
         .temp
@@ -93,6 +123,8 @@ fn ensemble(e: &EnsembleRaw, tz: chrono_tz::Tz) -> Value {
         .zip(&e.precip)
         .map(|(t, p)| member_days(&e.times, t, p, tz))
         .collect();
+    let from = start_step(&e.times, now);
+    let accum: Vec<Vec<Option<f64>>> = e.precip.iter().map(|p| running_sum(p, from)).collect();
     json!({
         "model": "ecmwf_ifs025",
         "members": ENSEMBLE_MEMBERS,
@@ -100,6 +132,7 @@ fn ensemble(e: &EnsembleRaw, tz: chrono_tz::Tz) -> Value {
             "time": iso(&e.times),
             "temperature_f": bands(&e.temp, steps, 1),
             "precip_in": bands(&e.precip, steps, 3),
+            "precip_accum_in": bands(&accum, steps, 3),
         },
         "daily": daily(&members).iter().map(|d| json!({
             "date": d.date,
@@ -117,6 +150,7 @@ pub async fn forecast(
     ViewableStationPath(s): ViewableStationPath,
     _: NoQuery,
 ) -> ApiResult<Json<Value>> {
+    let now = st.clock.now();
     let (f, e) = tokio::join!(st.openmeteo.forecast(&s), st.openmeteo.ensemble(&s));
     if let (Err(a), Err(b)) = (&f, &e) {
         // Rate-limited upstream is "busy"; anything else is "unavailable".
@@ -137,12 +171,12 @@ pub async fn forecast(
     let det = f.ok().map(|c| {
         generated.push(c.fetched_at);
         stale |= c.stale;
-        deterministic(&c.value)
+        deterministic(&c.value, now)
     });
     let ens = e.ok().map(|c| {
         generated.push(c.fetched_at);
         stale |= c.stale;
-        ensemble(&c.value, s.timezone())
+        ensemble(&c.value, s.timezone(), now)
     });
     let generated_at = generated
         .into_iter()
@@ -156,9 +190,17 @@ pub async fn forecast(
         json!(generated_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
     );
     out.insert("stale".into(), json!(stale));
+    // Additive keys (proposal 07 phase 2): wind, pressure, snow and the percentages (cloud, humidity, probability).
     out.insert(
         "units".into(),
-        json!({ "temperature": "F", "precipitation": "in" }),
+        json!({
+            "temperature": "F",
+            "precipitation": "in",
+            "wind": "mph",
+            "pressure": "inHg",
+            "snow": "in",
+            "percent": "%"
+        }),
     );
     out.insert("attribution".into(), json!(ATTRIBUTION));
     out.insert("deterministic".into(), det.unwrap_or(Value::Null));

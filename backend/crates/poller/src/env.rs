@@ -8,6 +8,7 @@ use std::time::Duration;
 use famweather_core::acis::AcisApi;
 use famweather_core::awn::AwnApi;
 use famweather_core::clock::Clock;
+use famweather_core::config::AwnMode;
 use famweather_core::db::ConnectHook;
 use famweather_core::ratelimit::LockTimeouts;
 use secrecy::SecretString;
@@ -17,6 +18,10 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::keys::KeyRing;
+
+/// Gate spacing in `AWN_MODE=replay`. Replay never sends a request to AWN, so AWN's real limits do not apply there;
+/// the gates still run (same statement, same sleeps) at this spacing so a local backfill takes seconds, not minutes.
+pub const REPLAY_GATE_SPACING: Duration = Duration::from_millis(20);
 
 /// Gate spacing and the longest a reservation may wait (03 section 5.3).
 #[derive(Debug, Clone, Copy)]
@@ -33,6 +38,38 @@ impl Default for GateConfig {
             key_spacing: Duration::from_millis(1000),
             max_wait: Duration::from_secs(120),
         }
+    }
+}
+
+impl GateConfig {
+    /// The gates for `mode`: AWN's real spacing in live mode (not configurable), `REPLAY_GATE_SPACING` in replay.
+    pub fn for_awn_mode(mode: AwnMode) -> Self {
+        match mode {
+            AwnMode::Live => Self::default(),
+            AwnMode::Replay => Self {
+                app_spacing: REPLAY_GATE_SPACING,
+                key_spacing: REPLAY_GATE_SPACING,
+                max_wait: Self::default().max_wait,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_uses_the_short_spacing_and_live_uses_the_real_one() {
+        let replay = GateConfig::for_awn_mode(AwnMode::Replay);
+        assert_eq!(replay.app_spacing, Duration::from_millis(20));
+        assert_eq!(replay.key_spacing, Duration::from_millis(20));
+        assert_eq!(replay.max_wait, Duration::from_secs(120));
+
+        let live = GateConfig::for_awn_mode(AwnMode::Live);
+        assert_eq!(live.app_spacing, Duration::from_millis(500));
+        assert_eq!(live.key_spacing, Duration::from_millis(1000));
+        assert_eq!(live.max_wait, Duration::from_secs(120));
     }
 }
 
@@ -152,6 +189,13 @@ impl Env {
             poll: Duration::from_millis(20),
             total: Duration::from_millis(600),
         };
+        self
+    }
+
+    /// Sets the gate spacing for the configured `AWN_MODE` (see `GateConfig::for_awn_mode`). Production calls this once
+    /// at startup; `Env::new` alone keeps the live spacing.
+    pub fn with_awn_mode(mut self, mode: AwnMode) -> Env {
+        self.gates = GateConfig::for_awn_mode(mode);
         self
     }
 

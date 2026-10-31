@@ -147,28 +147,58 @@ export function forecast(over: Partial<Forecast> = {}): Forecast {
   const n = 15 * 24;
   const days = Array.from({ length: 15 }, (_, i) => `2026-07-${p2(10 + i)}`);
   const t = band((i) => 60 + 15 * Math.sin(i / 3.8));
-  const pr = band((i) => (i % 9 === 0 ? 0.04 : 0.005));
+  // Hourly ensemble rain: a range from zero up to about twice the median, as the API gives (not median plus or minus 3).
+  const pr = (n: number) => ({
+    p10: Array.from({ length: n }, () => 0),
+    p50: Array.from({ length: n }, (_, i) => (i === 5 ? null : i % 9 === 0 ? 0.04 : 0.005)),
+    p90: Array.from({ length: n }, (_, i) => (i === 5 ? null : i % 9 === 0 ? 0.08 : 0.01))
+  });
+  const acc = band((i) => 3 + 0.01 * i);
+  const precip = Array.from({ length: n }, (_, i) => (i % 9 === 0 ? 0.03 : 0));
+  // Running total of the deterministic precipitation, as the API computes it.
+  const precipAccum = precip.reduce<number[]>((out, v, i) => [...out, (i === 0 ? 0 : out[i - 1]) + v], []);
   return {
     station_id: STATION_ID,
     timezone: 'America/Denver',
     generated_at: '2026-07-10T12:00:00Z',
     stale: false,
     attribution: 'Weather data by Open-Meteo.com (CC BY 4.0)',
-    units: { temperature: 'F', precipitation: 'in' },
+    units: { temperature: 'F', precipitation: 'in', wind: 'mph', pressure: 'inHg', snow: 'in', percent: '%' },
     deterministic: {
       model: 'gfs_seamless',
       hourly: {
         time: hours(n),
         temperature_f: Array.from({ length: n }, (_, i) => 60 + 15 * Math.sin(i / 3.8)),
-        precip_in: Array.from({ length: n }, (_, i) => (i % 9 === 0 ? 0.03 : 0)),
-        prob_precip: Array.from({ length: n }, () => 20)
+        precip_in: precip,
+        prob_precip: Array.from({ length: n }, () => 20),
+        precip_accum_in: precipAccum,
+        apparent_temp_f: Array.from({ length: n }, (_, i) => 58 + 14 * Math.sin(i / 3.8)),
+        dew_point_f: Array.from({ length: n }, (_, i) => 40 + 3 * Math.sin(i / 5)),
+        cloud_pct: Array.from({ length: n }, (_, i) => (i * 37) % 101),
+        humidity_pct: Array.from({ length: n }, (_, i) => 50 + (i % 40)),
+        pressure_inhg: Array.from({ length: n }, (_, i) => Math.round((30.1 + 0.1 * Math.sin(i / 10)) * 100) / 100),
+        wind_mph: Array.from({ length: n }, (_, i) => Math.abs(5 + 4 * Math.sin(i / 4))),
+        wind_dir_deg: Array.from({ length: n }, (_, i) => (i * 15) % 360),
+        gust_mph: Array.from({ length: n }, (_, i) => Math.abs(5 + 4 * Math.sin(i / 4)) + 5),
+        weather_code: Array.from({ length: n }, (_, i) => (i % 20 === 0 ? 61 : 3)),
+        snow_in: Array.from({ length: n }, () => 0)
       },
-      daily: days.map((date, i) => ({ date, tmax_f: 80 - i, tmin_f: 50 - i / 2, precip_in: i % 3 === 0 ? 0.1 : 0, prob_precip_max: 30 }))
+      daily: days.map((date, i) => ({
+        date,
+        tmax_f: 80 - i,
+        tmin_f: 50 - i / 2,
+        precip_in: i % 3 === 0 ? 0.1 : 0,
+        prob_precip_max: 30,
+        weather_code: i % 2 === 0 ? 3 : 61,
+        snow_in: 0,
+        sunrise: `${date}T12:30:00Z`,
+        sunset: `2026-07-${p2(11 + i)}T02:20:00Z`
+      }))
     },
     ensemble: {
       model: 'ecmwf_ifs025',
       members: 51,
-      hourly: { time: hours(n), temperature_f: t(n), precip_in: pr(n) },
+      hourly: { time: hours(n), temperature_f: t(n), precip_in: pr(n), precip_accum_in: acc(n) },
       daily: days.map((date, i) => ({
         date,
         tmax_f: { p10: 74 - i, p50: 80 - i, p90: 86 - i },

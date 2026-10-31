@@ -4,8 +4,8 @@
 #   reference_sync -> awn_backfill -> awn_ingest -> daily_rollup
 # (backfill before ingest: a station with no data gets only one page from ingest, 03 section 7.1), then asserts through
 # psql that every seeded station has observations and rollups and every reference station has >= 12 years of record.
-# Idempotent. Prerequisite: `make seed`. AWN_MODE comes from .env (replay by default); in replay the backfill takes about
-# three minutes because the per-key rate gate (1 request per second) applies in every mode.
+# Idempotent. Prerequisite: `make seed`. AWN_MODE comes from .env (replay by default). The gates run in replay too, at a
+# 20 ms spacing (poller GateConfig::for_awn_mode); live mode keeps AWN's 1 request per second limit.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 C=${COMPOSE:-docker compose}

@@ -123,16 +123,46 @@ export interface Forecast {
   generated_at: string;
   stale: boolean;
   attribution: string;
-  units: { temperature: 'F'; precipitation: 'in' };
+  units: { temperature: 'F'; precipitation: 'in'; wind: 'mph'; pressure: 'inHg'; snow: 'in'; percent: '%' };
   deterministic: {
     model: string;
-    hourly: { time: string[]; temperature_f: (number | null)[]; precip_in: (number | null)[]; prob_precip: (number | null)[] };
-    daily: { date: string; tmax_f: number | null; tmin_f: number | null; precip_in: number | null; prob_precip_max: number | null }[];
+    hourly: {
+      time: string[];
+      temperature_f: (number | null)[];
+      precip_in: (number | null)[];
+      prob_precip: (number | null)[];
+      /** Running total of precip_in from the first hour not in the past; null before it. */
+      precip_accum_in: (number | null)[];
+      apparent_temp_f: (number | null)[];
+      dew_point_f: (number | null)[];
+      cloud_pct: (number | null)[];
+      humidity_pct: (number | null)[];
+      /** Sea-level pressure, already converted from hPa by the API. */
+      pressure_inhg: (number | null)[];
+      wind_mph: (number | null)[];
+      wind_dir_deg: (number | null)[];
+      gust_mph: (number | null)[];
+      weather_code: (number | null)[];
+      /** Inches of snow, not liquid. */
+      snow_in: (number | null)[];
+    };
+    daily: {
+      date: string;
+      tmax_f: number | null;
+      tmin_f: number | null;
+      precip_in: number | null;
+      prob_precip_max: number | null;
+      weather_code: number | null;
+      snow_in: number | null;
+      /** UTC instants (the API converts the station's local times). */
+      sunrise: string | null;
+      sunset: string | null;
+    }[];
   } | null;
   ensemble: {
     model: string;
     members: number;
-    hourly: { time: string[]; temperature_f: BandSeries; precip_in: BandSeries };
+    hourly: { time: string[]; temperature_f: BandSeries; precip_in: BandSeries; precip_accum_in: BandSeries };
     daily: { date: string; tmax_f: Band; tmin_f: Band; precip_in: Band; prob_precip: number | null }[];
   } | null;
 }

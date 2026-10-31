@@ -11,6 +11,7 @@ use tokio::sync::Semaphore;
 
 use crate::access::ViewableStation;
 
+pub mod accumulation;
 pub mod cache;
 pub mod changes;
 mod client;
@@ -33,6 +34,16 @@ pub const MAX_CONCURRENT_CALLS: usize = 3;
 pub const CALLS_PER_MINUTE: u32 = 60;
 pub const ENSEMBLE_MEMBERS: usize = 51;
 
+/// The deterministic `gfs_seamless` request's variables (02 5.6, proposal 07 section 3). The recorder reads these
+/// same lists, so the committed fixtures always carry what the parser needs.
+pub const FORECAST_HOURLY: &str = "temperature_2m,precipitation,precipitation_probability,apparent_temperature,\
+    dew_point_2m,cloud_cover,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,\
+    weather_code,snowfall";
+pub const FORECAST_DAILY: &str = "temperature_2m_max,temperature_2m_min,precipitation_sum,\
+    precipitation_probability_max,sunrise,sunset,weather_code,snowfall_sum";
+/// Wind is requested in mph (the API default is km/h). Pressure has no unit option: it is converted in the API.
+pub const FORECAST_WIND_SPEED_UNIT: &str = "mph";
+
 /// First day the Previous Runs archive has day-1 values, and the first day with probability (02 5.6a).
 pub const PREVIOUS_RUNS_FIRST_DAY: (i32, u32, u32) = (2024, 1, 25);
 pub const PROBABILITY_FIRST_DAY: (i32, u32, u32) = (2024, 10, 18);
@@ -53,14 +64,33 @@ pub struct DailyRaw {
     pub tmin: Option<f64>,
     pub precip: Option<f64>,
     pub prob_max: Option<f64>,
+    pub weather_code: Option<f64>,
+    /// Inches of snow (not liquid).
+    pub snow: Option<f64>,
+    /// UTC instants, converted from the station's local wall-clock times in the parser.
+    pub sunrise: Option<DateTime<Utc>>,
+    pub sunset: Option<DateTime<Utc>>,
 }
 
+/// Hourly columns are parallel to `times`. Units are the API's requested units, except pressure, which the parser
+/// converts from hPa to inHg (`pressure_inhg`).
 #[derive(Debug, Clone)]
 pub struct ForecastRaw {
     pub times: Vec<DateTime<Utc>>,
     pub temp: Vec<Option<f64>>,
     pub precip: Vec<Option<f64>>,
     pub prob: Vec<Option<f64>>,
+    pub apparent_f: Vec<Option<f64>>,
+    pub dew_point_f: Vec<Option<f64>>,
+    pub cloud_pct: Vec<Option<f64>>,
+    pub humidity_pct: Vec<Option<f64>>,
+    pub pressure_inhg: Vec<Option<f64>>,
+    pub wind_mph: Vec<Option<f64>>,
+    pub wind_dir_deg: Vec<Option<f64>>,
+    pub gust_mph: Vec<Option<f64>>,
+    pub weather_code: Vec<Option<f64>>,
+    /// Inches of snow (not liquid).
+    pub snow_in: Vec<Option<f64>>,
     pub daily: Vec<DailyRaw>,
 }
 

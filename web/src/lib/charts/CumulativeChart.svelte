@@ -7,7 +7,19 @@
   import { splitCurrent, toPoints } from '$lib/transforms/series';
   import { buildSlots, fieldOf, type Metric } from '$lib/transforms/slots';
   import ChartFrame from './ChartFrame.svelte';
-  import { H, M, W, linePath, makeScales, ribbonPath } from './scales';
+  import ChartLegend from './ChartLegend.svelte';
+  import ChartTooltip from './ChartTooltip.svelte';
+  import { legendLayout, type LegendItem } from './legend';
+  import { H, M, linePath, makeScales, ribbonPath } from './scales';
+  import { cumulativeRows } from './tipRows';
+  import { useCrosshair } from './useCrosshair.svelte';
+  import { type TipBox } from './tooltip';
+
+  // Measured width, drawn at 1:1 pixels (like the other charts), so the 12 px text is not scaled with the card.
+  const MAX_WIDTH = 1400;
+  const DEFAULT_WIDTH = 900;
+  let measured = $state(0);
+  const width = $derived(Math.min(MAX_WIDTH, measured || DEFAULT_WIDTH));
 
   let {
     ytd,
@@ -49,7 +61,7 @@
     if (layers.outer) bump(layers.outer.upper);
     return m * 1.05;
   });
-  const sc = $derived(makeScales(slots.length, yMax));
+  const sc = $derived(makeScales(slots.length, yMax, width, H));
   const xs = $derived((v: number) => sc.x(v));
   const ys = $derived((v: number) => sc.y(v));
 
@@ -87,21 +99,26 @@
   const missingCurrent = $derived(ytd.current.missing_days[metric]);
   const excluded = $derived(priors.filter((p) => !p.drawn));
 
-  let cursor = $state<number | null>(null);
-  function move(e: PointerEvent) {
-    const svg = e.currentTarget as SVGSVGElement;
-    const r = svg.getBoundingClientRect();
-    if (r.width === 0 || slots.length === 0) return;
-    const px = ((e.clientX - r.left) / r.width) * W;
-    const idx = Math.round(sc.x.invert(px));
-    cursor = Math.max(0, Math.min(slots.length - 1, idx));
-  }
-  function key(e: KeyboardEvent) {
-    if (slots.length === 0) return;
-    if (e.key === 'ArrowRight') cursor = Math.min(slots.length - 1, (cursor ?? -1) + 1);
-    else if (e.key === 'ArrowLeft') cursor = Math.max(0, (cursor ?? slots.length) - 1);
-    else return;
-    e.preventDefault();
+  // Legend rows above the plot: only the series this chart draws.
+  const legendItems = $derived.by((): LegendItem[] => {
+    const out: LegendItem[] = [{ label: 'This year', mark: 'line', cls: 'line-current' }];
+    if (split.partial.length > 0) out.push({ label: 'Today (partial)', mark: 'line', cls: 'line-current-partial' });
+    if (layers.median) out.push({ label: 'Median', mark: 'line', cls: 'line-median' });
+    if (priors.some((p) => p.drawn)) out.push({ label: 'Prior years', mark: 'line', cls: 'line-prior' });
+    if (layers.outer) out.push({ label: 'Percentile band', mark: 'band', cls: 'band-outer' });
+    return out;
+  });
+  // The legend spans the plot (between its left and right margins), so no item runs past the plot's right edge.
+  const legendWidth = $derived(width - M.l - M.r);
+  const legendHeight = $derived(legendLayout(legendItems, legendWidth).height);
+
+  // Hover or arrow keys pick one day (proposal 08 section 2.5). The readout line and the tooltip name the same values.
+  const xh = useCrosshair({ count: () => slots.length, stepAt: (px) => sc.x.invert(px), xAt: (i) => sc.x(i) });
+  const cursor = $derived(xh.index);
+  const cursorX = $derived(xh.px);
+  function pointerPx(e: PointerEvent): number {
+    const box = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+    return ((e.clientX - box.left) * width) / box.width;
   }
 
   const fmt = (v: number | undefined | null) => (v === undefined || v === null ? '-' : v.toFixed(metric === 'rain' ? 2 : 0));
@@ -116,7 +133,31 @@
     const range = p && ps.length >= 2 ? `${fmt(p[0])} to ${fmt(p[p.length - 1])}` : '-';
     return `${mdLabel(md)}: this year ${fmt(curByMd.get(md))} ${valueLabel}; median ${fmt(med)}; band ${range}`;
   });
-  const cursorX = $derived(cursor === null ? null : xs(cursor));
+  // The tooltip: this year (complete days), today (the open day), median, band range and each prior year drawn.
+  const completeByMd = $derived(new Map(split.complete.map((p) => [p.md, p.v])));
+  const partialByMd = $derived(new Map(split.partial.map((p) => [p.md, p.v])));
+  const tip = $derived.by((): TipBox | null => {
+    const i = cursor;
+    if (i === null || slots[i] === undefined) return null;
+    const md = slots[i];
+    const p = bandRows.get(md);
+    const ps = ytd.bands?.percentiles ?? [];
+    const medIdx = ps.indexOf(50);
+    const rows = cumulativeRows(
+      {
+        thisYear: completeByMd.get(md) ?? null,
+        // the partial segment is joined to the last complete day, so that shared day is not repeated as "today"
+        partial: completeByMd.has(md) ? null : (partialByMd.get(md) ?? null),
+        median: p && medIdx >= 0 ? p[medIdx] : null,
+        bandLo: p && ps.length >= 2 ? p[0] : null,
+        bandHi: p && ps.length >= 2 ? p[p.length - 1] : null,
+        priors: priors.filter((q) => q.drawn).map((q) => ({ year: q.year, v: q.pts[i]?.y ?? null }))
+      },
+      metric === 'rain' ? 2 : 0,
+      ` ${valueLabel}`
+    );
+    return { title: mdLabel(md), rows };
+  });
 </script>
 
 <ChartFrame {title} {provenance}>
@@ -128,45 +169,52 @@
       Data starts {ytd.current.first_date}; earlier days are not included, so the total reads low against the baseline.
     </p>
   {/if}
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-  <svg
-    class="chart-svg"
-    viewBox={`0 0 ${W} ${H}`}
-    role="img"
-    tabindex="0"
-    aria-label={`${metric === 'rain' ? 'Rain' : 'Growing degree days'} for the season, cumulative`}
-    onpointermove={move}
-    onpointerleave={() => (cursor = null)}
-    onkeydown={key}
-  >
-    {#each winterRects as r (r.x)}
-      <rect class="winter" x={r.x} y={M.t} width={r.w} height={H - M.t - M.b} />
-    {/each}
-    {#each yTicks as t (t)}
-      <line class="grid-line" x1={M.l} x2={W - M.r} y1={ys(t)} y2={ys(t)} />
-      <text x={M.l - 6} y={ys(t) + 4} text-anchor="end">{t}</text>
-    {/each}
-    {#each monthTicks as t (t.x)}
-      <text x={xs(t.x)} y={H - 8}>{t.label}</text>
-    {/each}
-    {#if layers.outer}<path class="band-outer" d={ribbonPath(layers.outer.lower, layers.outer.upper, xs, ys)} />{/if}
-    {#if layers.inner}<path class="band-inner" d={ribbonPath(layers.inner.lower, layers.inner.upper, xs, ys)} />{/if}
-    {#if layers.median}<path class="line-median" d={linePath(layers.median, xs, ys)} />{/if}
-    {#each priors as p (p.year)}
-      {#if p.drawn}<path class="line-prior" data-year={p.year} d={linePath(p.pts, xs, ys)} />{/if}
-    {/each}
-    <path class="line-current" d={linePath(completePts, xs, ys)} />
-    {#if split.partial.length > 0}<path class="line-current-partial" d={linePath(partialPts, xs, ys)} />{/if}
-    {#if cursorX !== null}<line class="cursor" x1={cursorX} x2={cursorX} y1={M.t} y2={H - M.b} />{/if}
-  </svg>
-  <div class="legend">
-    <span><span class="swatch"></span>This year</span>
-    {#if split.partial.length > 0}<span><span class="swatch partial"></span>Today (partial)</span>{/if}
-    {#if layers.median}<span><span class="swatch median"></span>Median</span>{/if}
-    {#if priors.some((p) => p.drawn)}<span><span class="swatch prior"></span>Prior years</span>{/if}
-    {#if layers.outer}<span><span class="swatch band"></span>Percentile band</span>{/if}
+  <div class="fit" bind:clientWidth={measured}>
+    {#if legendHeight > 0}
+      <svg class="chart-svg plot legend-row" {width} height={legendHeight} aria-hidden="true">
+        <ChartLegend items={legendItems} x={M.l} y={0} width={legendWidth} testid="legend-cumulative" />
+      </svg>
+    {/if}
+    <svg
+      class="chart-svg plot"
+      {width}
+      height={H}
+      role="slider"
+      tabindex="0"
+      aria-label={`${metric === 'rain' ? 'Rain' : 'Growing degree days'} for the season, cumulative`}
+      aria-valuemin={0}
+      aria-valuemax={Math.max(slots.length - 1, 0)}
+      aria-valuenow={cursor ?? undefined}
+      aria-valuetext={readout}
+      onpointermove={(e) => xh.onhover(pointerPx(e))}
+      onpointerleave={() => xh.onhover(null)}
+      onkeydown={xh.onkey}
+    >
+      {#each winterRects as r (r.x)}
+        <rect class="winter" x={r.x} y={M.t} width={r.w} height={H - M.t - M.b} />
+      {/each}
+      {#each yTicks as t (t)}
+        <line class="grid-line" x1={M.l} x2={width - M.r} y1={ys(t)} y2={ys(t)} />
+        <text x={M.l - 6} y={ys(t) + 4} text-anchor="end">{t}</text>
+      {/each}
+      {#each monthTicks as t (t.x)}
+        <text x={xs(t.x)} y={H - 8}>{t.label}</text>
+      {/each}
+      {#if layers.outer}<path class="band-outer" d={ribbonPath(layers.outer.lower, layers.outer.upper, xs, ys)} />{/if}
+      {#if layers.inner}<path class="band-inner" d={ribbonPath(layers.inner.lower, layers.inner.upper, xs, ys)} />{/if}
+      {#if layers.median}<path class="line-median" d={linePath(layers.median, xs, ys)} />{/if}
+      {#each priors as p (p.year)}
+        {#if p.drawn}<path class="line-prior" data-year={p.year} d={linePath(p.pts, xs, ys)} />{/if}
+      {/each}
+      <path class="line-current" d={linePath(completePts, xs, ys)} />
+      {#if split.partial.length > 0}<path class="line-current-partial" d={linePath(partialPts, xs, ys)} />{/if}
+      {#if cursorX !== null}<line class="crosshair" x1={cursorX} x2={cursorX} y1={M.t} y2={H - M.b} />{/if}
+      {#if cursorX !== null && tip}
+        <ChartTooltip box={tip} anchorX={cursorX} plotLeft={M.l} plotRight={width - M.r} top={M.t} bottom={H - M.b} testid="tip-cumulative" />
+      {/if}
+    </svg>
   </div>
-  <p class="readout" aria-live="polite" data-testid="readout">{readout}</p>
+  <p class="readout" data-testid="readout">{readout}</p>
   <details class="data-table">
     <summary>Show data table</summary>
     <div class="table-scroll">

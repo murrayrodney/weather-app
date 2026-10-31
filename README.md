@@ -86,7 +86,7 @@ make web-build
 make seed
 ```
 
-**5. Load demo readings.** Replays recorded station readings and the airport baseline history into the database (about 3 minutes, because requests are rate-limited to one per second even in replay). Needs step 4 first. Safe to re-run:
+**5. Load demo readings.** Replays recorded station readings and the airport baseline history into the database (under a minute in replay: the poller's rate gates still run, but at a 20 ms spacing because replay never calls AWN; live mode keeps AWN's real limit). Needs step 4 first. Safe to re-run:
 
 ```sh
 make e2e-data

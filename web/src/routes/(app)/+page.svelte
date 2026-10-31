@@ -6,6 +6,7 @@
   import { ApiError } from '$lib/api/errors';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ErrorPanel from '$lib/components/ErrorPanel.svelte';
+  import ForecastRow from '$lib/components/ForecastRow.svelte';
   import GddSettings from '$lib/components/GddSettings.svelte';
   import LoadingBlock from '$lib/components/LoadingBlock.svelte';
   import SeasonToggle from '$lib/components/SeasonToggle.svelte';
@@ -13,7 +14,7 @@
   import StationYtdView from '$lib/components/StationYtdView.svelte';
   import { DEFAULT_SEASON, FULL_YEAR, YTD_MAX_STATIONS } from '$lib/config';
   import { createResource } from '$lib/data/resource.svelte';
-  import type { GddSettings as Gdd, YtdResponse } from '$lib/api/types';
+  import type { GddSettings as Gdd, Station, YtdResponse } from '$lib/api/types';
   import { zoneDate } from '$lib/transforms/dates';
   import { parseGddSettings, toSearchParams } from '$lib/transforms/gddSettings';
   import { offSeasonLine } from '$lib/transforms/provenance';
@@ -23,7 +24,9 @@
 
   let { data } = $props();
 
-  let metric = $state<Metric>('rain');
+  // Forecast is the default tab (proposal 07); Rain and GDD keep their column charts.
+  let view = $state<'forecast' | Metric>('forecast');
+  const metric = $derived<Metric>(view === 'gdd' ? 'gdd' : 'rain');
   let range = $state<'season' | 'full'>('season');
   let sameScale = $state(false);
   let picked = $state<string[] | null>(null);
@@ -36,6 +39,9 @@
     const ids = picked ?? all.map((s) => s.id);
     return ids.filter((id) => all.some((s) => s.id === id)).slice(0, YTD_MAX_STATIONS);
   });
+  const selectedStations = $derived(
+    selected.map((id) => (stations.data ?? []).find((s) => s.id === id)).filter((s): s is Station => s !== undefined)
+  );
   const win = $derived(range === 'season' ? DEFAULT_SEASON : FULL_YEAR);
   const season = $derived.by(() => {
     const first = (stations.data ?? []).find((s) => s.id === selected[0]);
@@ -48,7 +54,8 @@
     const w = win;
     const g = gdd;
     const year = season.year;
-    if (ids.length === 0) return null;
+    const onColumns = view !== 'forecast'; // the forecast tab fetches /forecast per row instead
+    if (ids.length === 0 || !onColumns) return null;
     return getYtd({ stationIds: ids, year, start: w.start, end: w.end, gdd: g }, signal);
   });
 
@@ -82,21 +89,30 @@
     <EmptyState />
   {:else}
     <div class="controls">
-      <div class="tabs" role="group" aria-label="Metric">
-        <button type="button" aria-pressed={metric === 'rain'} onclick={() => (metric = 'rain')}>Rain</button>
-        <button type="button" aria-pressed={metric === 'gdd'} onclick={() => (metric = 'gdd')}>GDD</button>
+      <div class="tabs" role="group" aria-label="View">
+        <button type="button" aria-pressed={view === 'forecast'} onclick={() => (view = 'forecast')}>Forecast</button>
+        <button type="button" aria-pressed={view === 'rain'} onclick={() => (view = 'rain')}>Rain</button>
+        <button type="button" aria-pressed={view === 'gdd'} onclick={() => (view = 'gdd')}>GDD</button>
       </div>
-      <SeasonToggle value={range} onchange={(v) => (range = v)} />
-      <label class="small"><input type="checkbox" bind:checked={sameScale} /> Same scale for all stations</label>
+      {#if view !== 'forecast'}
+        <SeasonToggle value={range} onchange={(v) => (range = v)} />
+        <label class="small"><input type="checkbox" bind:checked={sameScale} /> Same scale for all stations</label>
+      {/if}
       <StationPicker stations={stations.data ?? []} {selected} onchange={(ids) => (picked = ids)} />
     </div>
-    {#if metric === 'gdd'}<GddSettings value={gdd} onchange={setGdd} windowEnd={win.end} />{/if}
+    {#if view === 'gdd'}<GddSettings value={gdd} onchange={setGdd} windowEnd={win.end} />{/if}
 
-    {#if season.offSeason}
+    {#if view !== 'forecast' && season.offSeason}
       <p class="banner" data-testid="off-season-banner">{offSeasonLine(season.year)}</p>
     {/if}
 
-    {#if ytd.status === 'loading'}
+    {#if view === 'forecast'}
+      <div class="forecast-rows">
+        {#each selectedStations as s (s.id)}
+          <ForecastRow station={s} />
+        {/each}
+      </div>
+    {:else if ytd.status === 'loading'}
       <LoadingBlock label="Loading charts..." />
     {:else if notFound}
       <ErrorPanel error={ytd.error} onretry={reloadAll} />

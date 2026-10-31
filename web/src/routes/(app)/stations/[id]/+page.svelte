@@ -10,6 +10,7 @@
   import GddSettings from '$lib/components/GddSettings.svelte';
   import LoadingBlock from '$lib/components/LoadingBlock.svelte';
   import SeasonToggle from '$lib/components/SeasonToggle.svelte';
+  import StationForecast from '$lib/components/StationForecast.svelte';
   import StationYtdView from '$lib/components/StationYtdView.svelte';
   import { DEFAULT_SEASON, FEATURES, FULL_YEAR } from '$lib/config';
   import { createResource } from '$lib/data/resource.svelte';
@@ -68,53 +69,65 @@
   {:else if station.data}
     {@const s = station.data}
     <h1>{s.name}</h1>
-    <div class="controls">
-      <div class="tabs" role="group" aria-label="View">
-        <button type="button" aria-pressed={metric === 'rain'} onclick={() => (metric = 'rain')}>Rain</button>
-        <button type="button" aria-pressed={metric === 'gdd'} onclick={() => (metric = 'gdd')}>GDD</button>
-        {#if FEATURES.forecast}<a class="button secondary" href={'/stations/' + s.id + '/forecast'}>Forecast</a>{/if}
-      </div>
-      <SeasonToggle value={range} onchange={(v) => (range = v)} />
-    </div>
-    {#if metric === 'gdd'}<GddSettings value={gdd} onchange={setGdd} windowEnd={win.end} />{/if}
-    {#if season.offSeason}<p class="banner" data-testid="off-season-banner">{offSeasonLine(season.year)}</p>{/if}
-
-    {#if ytd.status === 'loading'}
-      <LoadingBlock label="Loading charts..." />
-    {:else if ytd.status === 'error'}
-      <ErrorPanel error={ytd.error} onretry={() => ytd.reload()} />
-    {:else if ytd.data && ytd.data.stations[0]}
-      <div class="detail">
-        <StationYtdView
-          resp={ytd.data}
-          st={ytd.data.stations[0]}
-          station={s}
-          {metric}
-          {win}
-          offSeason={season.offSeason}
-          credentialStatus={data.me.credential?.status ?? null}
-          onbaseline={baselineChanged}
-        />
-      </div>
-    {/if}
-
-    <section class="card baseline-panel" data-testid="baseline-panel">
-      <h2>Baseline</h2>
-      {#if s.baseline}
-        <p>
-          Baseline: {s.baseline.name} ({s.baseline.reference_station_id}), {labels.baselineSource(s.baseline.source)}
-          {#if !s.baseline.history_loaded}<span class="muted"> (history loading)</span>{/if}
-        </p>
-      {:else}
-        <p>No baseline is set for this station yet.</p>
+    <nav class="section-nav" aria-label="Station sections">
+      {#if FEATURES.forecast}
+        <a href="#forecast">Forecast</a>
+        <a href="#changes">Changes</a>
       {/if}
-      {#if s.is_own}
-        {#if !changing}
-          <button type="button" class="secondary" onclick={() => (changing = true)}>{s.baseline ? 'Change baseline' : 'Choose a baseline'}</button>
+      <a href="#season">Rain and GDD</a>
+    </nav>
+
+    <StationForecast station={s} />
+
+    <section id="season" class="station-section">
+      <h2>Rain and GDD</h2>
+      <div class="controls">
+        <div class="tabs" role="group" aria-label="View">
+          <button type="button" aria-pressed={metric === 'rain'} onclick={() => (metric = 'rain')}>Rain</button>
+          <button type="button" aria-pressed={metric === 'gdd'} onclick={() => (metric = 'gdd')}>GDD</button>
+        </div>
+        <SeasonToggle value={range} onchange={(v) => (range = v)} />
+      </div>
+      {#if metric === 'gdd'}<GddSettings value={gdd} onchange={setGdd} windowEnd={win.end} />{/if}
+      {#if season.offSeason}<p class="banner" data-testid="off-season-banner">{offSeasonLine(season.year)}</p>{/if}
+
+      {#if ytd.status === 'loading'}
+        <LoadingBlock label="Loading charts..." />
+      {:else if ytd.status === 'error'}
+        <ErrorPanel error={ytd.error} onretry={() => ytd.reload()} />
+      {:else if ytd.data && ytd.data.stations[0]}
+        <div class="detail">
+          <StationYtdView
+            resp={ytd.data}
+            st={ytd.data.stations[0]}
+            station={s}
+            {metric}
+            {win}
+            offSeason={season.offSeason}
+            credentialStatus={data.me.credential?.status ?? null}
+            onbaseline={baselineChanged}
+          />
+        </div>
+      {/if}
+
+      <section class="card baseline-panel" data-testid="baseline-panel">
+        <h2>Baseline</h2>
+        {#if s.baseline}
+          <p>
+            Baseline: {s.baseline.name} ({s.baseline.reference_station_id}), {labels.baselineSource(s.baseline.source)}
+            {#if !s.baseline.history_loaded}<span class="muted"> (history loading)</span>{/if}
+          </p>
         {:else}
-          <BaselinePicker stationId={s.id} stationName={s.name} ondone={baselineChanged} onskip={() => (changing = false)} />
+          <p>No baseline is set for this station yet.</p>
         {/if}
-      {/if}
+        {#if s.is_own}
+          {#if !changing}
+            <button type="button" class="secondary" onclick={() => (changing = true)}>{s.baseline ? 'Change baseline' : 'Choose a baseline'}</button>
+          {:else}
+            <BaselinePicker stationId={s.id} stationName={s.name} ondone={baselineChanged} onskip={() => (changing = false)} />
+          {/if}
+        {/if}
+      </section>
     </section>
   {/if}
 </main>

@@ -6,13 +6,13 @@ export const W = 520;
 export const H = 280;
 export const M = { l: 46, r: 10, t: 10, b: 28 } as const;
 
-export function makeScales(nX: number, yMax: number) {
+export function makeScales(nX: number, yMax: number, w: number = W, h: number = H) {
   const x = scaleLinear()
     .domain([0, Math.max(nX - 1, 1)])
-    .range([M.l, W - M.r]);
+    .range([M.l, w - M.r]);
   const y = scaleLinear()
     .domain([0, yMax > 0 ? yMax : 1])
-    .range([H - M.b, M.t])
+    .range([h - M.b, M.t])
     .nice();
   return { x, y };
 }
@@ -26,6 +26,30 @@ export function linePath(pts: (Pt | null)[], x: Scale, y: Scale): string {
     .x((d) => x(d!.x))
     .y((d) => y(d!.y));
   return gen(pts) ?? '';
+}
+
+/** Vertical range lines (one per step where both bounds are known), e.g. an hourly ensemble p10 to p90. */
+export function rangePath(lower: (Pt | null)[], upper: (Pt | null)[], x: Scale, y: Scale): string {
+  let d = '';
+  lower.forEach((lo, i) => {
+    const hi = upper[i];
+    if (!lo || !hi) return;
+    const px = x(lo.x);
+    d += `M${px} ${y(hi.y)}V${y(lo.y)}`;
+  });
+  return d;
+}
+
+/** Vertical bars from zero up to each value, `half` px either side of the step's x. Null, zero and negative steps are skipped. */
+export function barPath(vals: (number | null)[], x: Scale, y: Scale, half: number): string {
+  const base = y(0);
+  let d = '';
+  vals.forEach((v, i) => {
+    if (v === null || !(v > 0)) return;
+    const cx = x(i);
+    d += `M${cx - half} ${base}V${y(v)}H${cx + half}V${base}Z`;
+  });
+  return d;
 }
 
 /** Filled ribbon between two aligned series; steps where either is null break the ribbon. */

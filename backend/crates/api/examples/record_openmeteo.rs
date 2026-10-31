@@ -2,12 +2,15 @@
 //!
 //! `cargo run -p api --example record_openmeteo -- --station-index 1 --as helena`
 //!
+//! Always records all three files for one station (forecast, ensemble and previous runs), so they come from the same day.
+//!
 //! The location is the committed fake city-centre coordinate of seed station N in `ops/db/seed/seed.toml`; there are no
 //! `--lat/--lon` flags, so a family member's home coordinates can never be recorded. No API key is used.
 
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
+use api::openmeteo::{FORECAST_DAILY, FORECAST_HOURLY, FORECAST_WIND_SPEED_UNIT};
 use chrono::{Duration, NaiveDate, Utc};
 
 fn arg(name: &str) -> Option<String> {
@@ -69,16 +72,11 @@ async fn main() -> Result<()> {
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/open-meteo");
     std::fs::create_dir_all(&out)?;
 
+    // The same variable lists the API requests (api::openmeteo), so the fixture always carries what the parser reads.
     let mut p = common.clone();
-    p.push((
-        "hourly",
-        "temperature_2m,precipitation,precipitation_probability".into(),
-    ));
-    p.push((
-        "daily",
-        "temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max"
-            .into(),
-    ));
+    p.push(("hourly", FORECAST_HOURLY.into()));
+    p.push(("daily", FORECAST_DAILY.into()));
+    p.push(("wind_speed_unit", FORECAST_WIND_SPEED_UNIT.into()));
     p.push(("forecast_days", "16".into()));
     let body = get(&client, "https://api.open-meteo.com/v1/forecast", &p).await?;
     std::fs::write(out.join(format!("forecast__{tag}.json")), body)?;

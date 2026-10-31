@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test';
 import { DEMO_PASSWORD, USER_A_EMAIL } from '../helpers/env';
-import { json, loginUi } from '../helpers/api';
+import { json, loginUi, mockForecasts } from '../helpers/api';
 
 const sbKeys = (page: import('@playwright/test').Page) => page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('sb-')).length);
 
 // These specs end sessions (sign-out and refresh rotate tokens), so each signs in on its own instead of using storageState.
 test.describe('signed in', () => {
   test.beforeEach(async ({ page }) => {
+    await mockForecasts(page); // keeps the per-user general limiter for the many sign-ins below
     await loginUi(page, USER_A_EMAIL, DEMO_PASSWORD);
   });
 

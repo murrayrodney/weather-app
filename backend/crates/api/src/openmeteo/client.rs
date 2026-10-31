@@ -10,7 +10,8 @@ use url::Url;
 
 use super::{
     DailyRaw, EnsembleRaw, ForecastRaw, OmError, OpenMeteoApi, PrevRunsRaw, ENSEMBLE_HOST,
-    ENSEMBLE_MEMBERS, FORECAST_HOST, PREVIOUS_RUNS_HOST,
+    ENSEMBLE_MEMBERS, FORECAST_DAILY, FORECAST_HOST, FORECAST_HOURLY, FORECAST_WIND_SPEED_UNIT,
+    PREVIOUS_RUNS_HOST,
 };
 use crate::access::ViewableStation;
 use crate::openmeteo::changes::LEADS;
@@ -32,8 +33,10 @@ fn series(v: &Value) -> Option<Vec<Option<f64>>> {
     )
 }
 
-/// Local ISO strings (`2026-10-07T06:00`) of an hourly series to UTC. The series is regular, so only the first
-/// instant is converted and the rest follow hour by hour (this stays correct across DST changes).
+/// Local ISO strings (`2026-10-07T06:00`) of an hourly series to UTC. Open-Meteo labels every hour with the response's
+/// fixed `utc_offset_seconds` (the first day's offset, not the offset of each day), and the data is in regular elapsed
+/// hours. So the first label fixes the base instant and each later hour is one elapsed hour after it. That stays correct
+/// across a DST change; the labels after the change are not wall-clock time and must not be converted day by day.
 fn hourly_times(h: &Value, tz: Tz) -> Option<Vec<DateTime<Utc>>> {
     let times = h.get("time")?.as_array()?;
     let first = NaiveDateTime::parse_from_str(times.first()?.as_str()?, "%Y-%m-%dT%H:%M").ok()?;
@@ -57,6 +60,22 @@ fn json(bytes: &[u8]) -> Result<Value, OmError> {
     serde_json::from_slice(bytes).map_err(|_| OmError::Unavailable)
 }
 
+/// Multiplies hPa by this to get inches of mercury (1 inHg = 33.8638866667 hPa).
+const INHG_PER_HPA: f64 = 0.029_529_983_071_4;
+
+/// Sea-level pressure in hPa to inHg (02 5.6, proposal 07 section 3). Open-Meteo has no inHg option.
+pub fn hpa_to_inhg(hpa: f64) -> f64 {
+    hpa * INHG_PER_HPA
+}
+
+/// A wall-clock label (`2026-10-07T07:12`, as Open-Meteo returns sunrise and sunset) to a UTC instant. Every label in a
+/// response carries the response's fixed `utc_offset_seconds`, including dates after a DST change, so the offset is
+/// subtracted directly rather than looked up per day in the zone.
+fn local_instant(v: &Value, offset_secs: i64) -> Option<DateTime<Utc>> {
+    let naive = NaiveDateTime::parse_from_str(v.as_str()?, "%Y-%m-%dT%H:%M").ok()?;
+    Some(naive.and_utc() - chrono::Duration::seconds(offset_secs))
+}
+
 pub fn parse_forecast(bytes: &[u8], tz: Tz) -> Result<ForecastRaw, OmError> {
     let v = json(bytes)?;
     let h = v.get("hourly").ok_or(OmError::Unavailable)?;
@@ -76,6 +95,21 @@ pub fn parse_forecast(bytes: &[u8], tz: Tz) -> Result<ForecastRaw, OmError> {
         dget("precipitation_sum")?,
         dget("precipitation_probability_max")?,
     );
+    let (wcode, snow) = (dget("weather_code")?, dget("snowfall_sum")?);
+    // Sunrise and sunset are strings, one per day, so they are read directly rather than as numbers.
+    let offset = v
+        .get("utc_offset_seconds")
+        .and_then(Value::as_i64)
+        .ok_or(OmError::Unavailable)?;
+    let instants = |name: &str| -> Result<Vec<Option<DateTime<Utc>>>, OmError> {
+        let a = d
+            .get(name)
+            .and_then(Value::as_array)
+            .filter(|a| a.len() == dn)
+            .ok_or(OmError::Unavailable)?;
+        Ok(a.iter().map(|x| local_instant(x, offset)).collect())
+    };
+    let (sunrise, sunset) = (instants("sunrise")?, instants("sunset")?);
     let mut daily = Vec::with_capacity(dn);
     for (i, s) in dates.iter().enumerate() {
         let date = s
@@ -88,6 +122,10 @@ pub fn parse_forecast(bytes: &[u8], tz: Tz) -> Result<ForecastRaw, OmError> {
             tmin: tmin[i],
             precip: psum[i],
             prob_max: pmax[i],
+            weather_code: wcode[i],
+            snow: snow[i],
+            sunrise: sunrise[i],
+            sunset: sunset[i],
         });
     }
     Ok(ForecastRaw {
@@ -95,6 +133,19 @@ pub fn parse_forecast(bytes: &[u8], tz: Tz) -> Result<ForecastRaw, OmError> {
         temp: get("temperature_2m")?,
         precip: get("precipitation")?,
         prob: get("precipitation_probability")?,
+        apparent_f: get("apparent_temperature")?,
+        dew_point_f: get("dew_point_2m")?,
+        cloud_pct: get("cloud_cover")?,
+        humidity_pct: get("relative_humidity_2m")?,
+        pressure_inhg: get("pressure_msl")?
+            .into_iter()
+            .map(|x| x.map(hpa_to_inhg))
+            .collect(),
+        wind_mph: get("wind_speed_10m")?,
+        wind_dir_deg: get("wind_direction_10m")?,
+        gust_mph: get("wind_gusts_10m")?,
+        weather_code: get("weather_code")?,
+        snow_in: get("snowfall")?,
         daily,
     })
 }
@@ -280,15 +331,9 @@ impl OpenMeteoApi for LiveOpenMeteo {
     async fn forecast(&self, loc: &ViewableStation) -> Result<ForecastRaw, OmError> {
         let mut p = common(loc);
         p.push(("models", "gfs_seamless".to_owned()));
-        p.push((
-            "hourly",
-            "temperature_2m,precipitation,precipitation_probability".to_owned(),
-        ));
-        p.push((
-            "daily",
-            "temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max"
-                .to_owned(),
-        ));
+        p.push(("hourly", FORECAST_HOURLY.to_owned()));
+        p.push(("daily", FORECAST_DAILY.to_owned()));
+        p.push(("wind_speed_unit", FORECAST_WIND_SPEED_UNIT.to_owned()));
         p.push(("forecast_days", "16".to_owned()));
         let body = self
             .get(self.forecast.clone(), &p, FORECAST_TIMEOUT)
@@ -333,5 +378,116 @@ impl OpenMeteoApi for LiveOpenMeteo {
             .get(self.previous.clone(), &p, PREVIOUS_RUNS_TIMEOUT)
             .await?;
         parse_previous_runs(&body, loc.timezone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use serde_json::json;
+
+    /// A forecast body carrying every variable of the request (built from the request constants), two hourly steps
+    /// from local midnight on 7 October and two days (7 and 2 November, one in MDT and one in MST).
+    fn body(hpa: f64) -> Vec<u8> {
+        let mut h = serde_json::Map::new();
+        h.insert(
+            "time".into(),
+            json!(["2026-10-07T00:00", "2026-10-07T01:00"]),
+        );
+        for name in FORECAST_HOURLY.split(',') {
+            let v = if name == "pressure_msl" {
+                json!([hpa, hpa])
+            } else {
+                json!([1.0, 2.0])
+            };
+            h.insert(name.into(), v);
+        }
+        let mut d = serde_json::Map::new();
+        d.insert("time".into(), json!(["2026-10-07", "2026-11-02"]));
+        for name in FORECAST_DAILY.split(',') {
+            let v = match name {
+                "sunrise" => json!(["2026-10-07T07:12", "2026-11-02T06:20"]),
+                "sunset" => json!(["2026-10-07T18:30", "2026-11-02T16:40"]),
+                _ => json!([1.0, 2.0]),
+            };
+            d.insert(name.into(), v);
+        }
+        json!({ "utc_offset_seconds": -21600, "hourly": h, "daily": d }).to_string().into_bytes()
+    }
+
+    fn denver() -> Tz {
+        "America/Denver".parse().unwrap()
+    }
+
+    #[test]
+    fn sunrise_and_sunset_become_utc_instants_with_each_days_own_offset() {
+        let f = parse_forecast(&body(1013.25), denver()).unwrap();
+        // 07:12 MDT (UTC-6) is 13:12 UTC; 18:30 MDT is 00:30 UTC on the next day.
+        assert_eq!(
+            f.daily[0].sunrise,
+            Some(Utc.with_ymd_and_hms(2026, 10, 7, 13, 12, 0).unwrap())
+        );
+        assert_eq!(
+            f.daily[0].sunset,
+            Some(Utc.with_ymd_and_hms(2026, 10, 8, 0, 30, 0).unwrap())
+        );
+        // The response's fixed offset (-6 h, from the first day) labels 2 November too, so 06:20 is 12:20 UTC and
+        // 16:40 is 22:40 UTC. The labels are not converted with 2 November's own MST offset.
+        assert_eq!(
+            f.daily[1].sunrise,
+            Some(Utc.with_ymd_and_hms(2026, 11, 2, 12, 20, 0).unwrap())
+        );
+        assert_eq!(
+            f.daily[1].sunset,
+            Some(Utc.with_ymd_and_hms(2026, 11, 2, 22, 40, 0).unwrap())
+        );
+    }
+
+    /// Regression: a label after the DST change (2 Nov, 08:11) is read with the response's fixed -6 h offset, so it is
+    /// 14:11 UTC. Converting it with that day's MST offset would give 15:11 UTC, an hour late.
+    #[test]
+    fn a_sunrise_after_the_dst_change_uses_the_fixed_offset_not_that_days_offset() {
+        let mut v: Value = serde_json::from_slice(&body(1013.25)).unwrap();
+        v["daily"]["sunrise"][1] = json!("2026-11-02T08:11");
+        let f = parse_forecast(v.to_string().as_bytes(), denver()).unwrap();
+        assert_eq!(
+            f.daily[1].sunrise,
+            Some(Utc.with_ymd_and_hms(2026, 11, 2, 14, 11, 0).unwrap())
+        );
+    }
+
+    /// A response without its offset is refused: the labels cannot be read without it.
+    #[test]
+    fn a_response_without_utc_offset_seconds_is_unavailable() {
+        let mut v: Value = serde_json::from_slice(&body(1013.25)).unwrap();
+        v.as_object_mut().unwrap().remove("utc_offset_seconds");
+        assert!(parse_forecast(v.to_string().as_bytes(), denver()).is_err());
+    }
+
+    #[test]
+    fn pressure_is_converted_from_hpa_to_inhg() {
+        let f = parse_forecast(&body(1013.25), denver()).unwrap();
+        // 1013.25 hPa is 29.92 inHg.
+        assert!((f.pressure_inhg[0].unwrap() - 29.92).abs() < 0.005);
+        assert!((hpa_to_inhg(1013.25) - 29.9213).abs() < 0.0001);
+        assert_eq!(f.pressure_inhg.len(), 2);
+    }
+
+    #[test]
+    fn new_hourly_and_daily_columns_are_parsed_in_order() {
+        let f = parse_forecast(&body(1013.25), denver()).unwrap();
+        let steps = vec![Some(1.0), Some(2.0)];
+        assert_eq!(f.apparent_f, steps);
+        assert_eq!(f.dew_point_f, steps);
+        assert_eq!(f.cloud_pct, steps);
+        assert_eq!(f.humidity_pct, steps);
+        assert_eq!(f.wind_mph, steps);
+        assert_eq!(f.wind_dir_deg, steps);
+        assert_eq!(f.gust_mph, steps);
+        assert_eq!(f.weather_code, steps);
+        assert_eq!(f.snow_in, steps);
+        assert_eq!(f.daily[0].weather_code, Some(1.0));
+        assert_eq!(f.daily[1].snow, Some(2.0));
     }
 }

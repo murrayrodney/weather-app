@@ -2,7 +2,8 @@
 //!
 //! Every AWN request first reserves `awn:key:<credential_id>` and then `awn:app:poller` (key gate, then app gate),
 //! sleeps the database-computed waits, and makes one request. Reservations are made in this order everywhere, so
-//! they cannot deadlock. Gates apply in every `AWN_MODE`, replay included.
+//! they cannot deadlock. Gates apply in every `AWN_MODE`, replay included. Live spacing is AWN's real limit; replay
+//! uses `REPLAY_GATE_SPACING` (20 ms) because no request reaches AWN (`GateConfig::for_awn_mode`).
 
 use std::time::Duration;
 

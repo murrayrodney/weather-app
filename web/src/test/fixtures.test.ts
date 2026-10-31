@@ -26,6 +26,12 @@ describe('fixtures have the API shapes', () => {
     expect(forecast().ensemble).not.toBeNull();
     expect(forecastEnsembleNull().ensemble).toBeNull();
     expect(forecastChanges().lead_days).toHaveLength(8);
+    // Every hourly column is parallel to `time`, and sunrise and sunset are UTC instants.
+    const det = forecast().deterministic!;
+    for (const v of Object.values(det.hourly)) if (Array.isArray(v)) expect(v).toHaveLength(det.hourly.time.length);
+    expect(forecast().ensemble!.hourly.precip_accum_in.p50).toHaveLength(forecast().ensemble!.hourly.time.length);
+    expect(det.daily[0].sunrise).toMatch(/Z$/);
+    expect(det.daily[0].sunset).toMatch(/Z$/);
     expect(candidatesLoveland().candidates.length).toBeGreaterThan(0);
     expect(candidatesEmpty().candidates).toEqual([]);
     expect(JSON.stringify(userSearch())).not.toContain('@');

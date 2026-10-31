@@ -133,7 +133,14 @@ async fn forecast_shape_units_and_requests(db: PgPool) {
     assert_eq!(j["stale"], false);
     assert_eq!(
         j["units"],
-        json!({ "temperature": "F", "precipitation": "in" })
+        json!({
+            "temperature": "F",
+            "precipitation": "in",
+            "wind": "mph",
+            "pressure": "inHg",
+            "snow": "in",
+            "percent": "%"
+        })
     );
     assert_eq!(
         j["attribution"],
@@ -142,12 +149,64 @@ async fn forecast_shape_units_and_requests(db: PgPool) {
     let d = &j["deterministic"];
     assert_eq!(d["model"], "gfs_seamless");
     assert_eq!(d["daily"].as_array().unwrap().len(), 16);
-    assert_eq!(d["daily"][0]["date"], "2026-10-17");
+    // The stub serves the recorded forecast unshifted, so its first day is the day it was recorded (25 Oct 2026).
+    assert_eq!(d["daily"][0]["date"], "2026-10-25");
     let n = d["hourly"]["time"].as_array().unwrap().len();
-    for k in ["temperature_f", "precip_in", "prob_precip"] {
+    let hourly_keys = [
+        "temperature_f",
+        "precip_in",
+        "prob_precip",
+        "precip_accum_in",
+        "apparent_temp_f",
+        "dew_point_f",
+        "cloud_pct",
+        "humidity_pct",
+        "pressure_inhg",
+        "wind_mph",
+        "wind_dir_deg",
+        "gust_mph",
+        "weather_code",
+        "snow_in",
+    ];
+    for k in hourly_keys {
         assert_eq!(d["hourly"][k].as_array().unwrap().len(), n, "{k}");
     }
     assert!(d["hourly"]["time"][0].as_str().unwrap().ends_with('Z'));
+
+    // The fixture as recorded: pressure in hPa, precipitation in inches.
+    let raw: Value = serde_json::from_slice(&fixture("forecast__")).unwrap();
+    let raw_h = &raw["hourly"];
+    // Pressure: hPa converted to inHg in the API, rounded to two places (1022.3 hPa is 30.19 inHg).
+    let inhg = d["hourly"]["pressure_inhg"].as_array().unwrap();
+    assert_eq!(inhg[0].as_f64(), Some(30.19));
+    for (hpa, got) in raw_h["pressure_msl"].as_array().unwrap().iter().zip(inhg) {
+        let want = (hpa.as_f64().unwrap() * 0.0295299830714 * 100.0).round() / 100.0;
+        assert!((got.as_f64().unwrap() - want).abs() < 1e-9, "{hpa} hPa");
+    }
+    // The running total starts at the first step not in the past. This fixture begins after the test clock
+    // (17 Oct 2026 12:00 UTC), so every step is counted: each entry is the sum of the hourly values so far.
+    let accum = d["hourly"]["precip_accum_in"].as_array().unwrap();
+    let mut run = 0.0;
+    for (k, p) in raw_h["precipitation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        run += p.as_f64().unwrap();
+        assert!(
+            (accum[k].as_f64().unwrap() - run).abs() < 0.0006,
+            "step {k}"
+        );
+    }
+    // Daily rows carry the new fields: sunrise and sunset as UTC instants, weather code, snow in inches.
+    let day0 = &d["daily"][0];
+    assert!(day0["weather_code"].is_i64());
+    assert!(day0["snow_in"].is_number());
+    for k in ["sunrise", "sunset"] {
+        assert!(day0[k].as_str().unwrap().ends_with('Z'), "{k}");
+    }
+    assert_eq!(day0["sunrise"], "2026-10-25T13:59:00Z", "07:59 MDT");
     let e = &j["ensemble"];
     assert_eq!(
         (e["model"].as_str().unwrap(), e["members"].as_u64().unwrap()),
@@ -165,10 +224,59 @@ async fn forecast_shape_units_and_requests(db: PgPool) {
         e["hourly"]["precip_in"]["p10"][en - 1].is_null(),
         "the last precipitation hours are null, not an error"
     );
-    assert!(e["hourly"]["temperature_f"]["p10"][en - 1].is_number());
+    // The ensemble horizon ends with null steps for every member (the recorded hourly series ends before its last steps have
+    // member values), so the percentiles are null there too; the first step has values.
+    assert!(e["hourly"]["temperature_f"]["p10"][en - 1].is_null());
     assert!(e["hourly"]["temperature_f"]["p50"][0].is_number());
+    // The ensemble total: each member is accumulated first, then percentiles are taken. Every member's total never
+    // falls, so the percentiles never fall either; the final hours are null for every member.
+    let ea = &e["hourly"]["precip_accum_in"];
+    for k in ["p10", "p50", "p90"] {
+        assert_eq!(ea[k].as_array().unwrap().len(), en, "{k}");
+    }
+    assert!(ea["p50"][en - 1].is_null());
+    let p50: Vec<f64> = ea["p50"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(Value::as_f64)
+        .collect();
+    assert!(!p50.is_empty() && p50.windows(2).all(|w| w[0] <= w[1] + 1e-9));
+    for i in 0..en {
+        if let (Some(a), Some(b), Some(c)) = (
+            ea["p10"][i].as_f64(),
+            ea["p50"][i].as_f64(),
+            ea["p90"][i].as_f64(),
+        ) {
+            assert!(a <= b && b <= c, "step {i}");
+        }
+    }
+    // Route level, per-member method: the last ensemble total must not equal the sum of the hourly medians over the
+    // same steps. On this fixture (17 Oct to the end of the series) the per-member total is 0.24 in and the summed
+    // medians are 0.0 in, so this would fail if the route summed percentiles.
+    let ens_precip_p50 = e["hourly"]["precip_in"]["p50"].as_array().unwrap();
+    let from = ea["p50"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(Value::is_number)
+        .unwrap();
+    let summed: f64 = ens_precip_p50[from..].iter().flat_map(Value::as_f64).sum();
+    let per_member = ea["p50"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(Value::as_f64)
+        .unwrap();
+    assert!(
+        (per_member - summed).abs() > 0.01,
+        "per-member {per_member} vs summed hourly medians {summed}"
+    );
     let days = e["daily"].as_array().unwrap();
-    assert!(days.len() >= 13 && days.len() <= 15, "{}", days.len());
+    // A member-day needs every member's hours: the recording has missing member values from 6 Nov, so the complete days
+    // are 25 Oct to 5 Nov (12 days). The old 15-day recording had none missing.
+    assert_eq!(days.len(), 12, "complete member-days");
     for day in days {
         for k in ["tmax_f", "tmin_f", "precip_in"] {
             let (a, b, c) = (
@@ -188,12 +296,38 @@ async fn forecast_shape_units_and_requests(db: PgPool) {
         "models=gfs_seamless",
         "temperature_unit=fahrenheit",
         "precipitation_unit=inch",
+        "wind_speed_unit=mph",
         "timezone=America%2FDenver",
         "latitude=46.6",
         "longitude=-112",
         "forecast_days=16",
     ] {
         assert!(q.contains(needle), "{needle} in {q}");
+    }
+    // Every added variable is requested (parsed from the query, so the encoding of commas does not matter).
+    let pairs: std::collections::HashMap<String, String> = f[0]
+        .url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    let hourly: Vec<&str> = pairs["hourly"].split(',').collect();
+    for v in [
+        "apparent_temperature",
+        "dew_point_2m",
+        "cloud_cover",
+        "relative_humidity_2m",
+        "pressure_msl",
+        "wind_speed_10m",
+        "wind_direction_10m",
+        "wind_gusts_10m",
+        "weather_code",
+        "snowfall",
+    ] {
+        assert!(hourly.contains(&v), "hourly {v}");
+    }
+    let daily: Vec<&str> = pairs["daily"].split(',').collect();
+    for v in ["sunrise", "sunset", "weather_code", "snowfall_sum"] {
+        assert!(daily.contains(&v), "daily {v}");
     }
     let q = stub.requests("/ensemble").await[0]
         .url
@@ -311,7 +445,7 @@ async fn hidden_stations_cost_no_upstream_call_and_no_location_parameters(db: Pg
             "{who}"
         );
         assert_eq!(
-            w.get(who, &changes(s, "from=2026-10-10&to=2026-10-12"))
+            w.get(who, &changes(s, "from=2026-10-12&to=2026-10-14"))
                 .await
                 .status,
             StatusCode::NOT_FOUND,
@@ -357,7 +491,7 @@ async fn the_call_budget_is_enforced(db: PgPool) {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert!(r.json()["ensemble"].is_null());
     let r = w
-        .get("owner", &changes(a, "from=2026-10-10&to=2026-10-12"))
+        .get("owner", &changes(a, "from=2026-10-12&to=2026-10-14"))
         .await;
     assert_eq!(
         (r.status.as_u16(), r.code().as_str()),
@@ -367,7 +501,7 @@ async fn the_call_budget_is_enforced(db: PgPool) {
     // Time refills the bucket.
     w.clock.advance(Cd::minutes(1));
     assert_eq!(
-        w.get("owner", &changes(a, "from=2026-10-10&to=2026-10-12"))
+        w.get("owner", &changes(a, "from=2026-10-12&to=2026-10-14"))
             .await
             .status,
         StatusCode::OK
@@ -379,7 +513,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     let stub = Stub::start().await;
     let (w, s) = world(db, &stub).await;
     let r = w
-        .get("owner", &changes(s, "from=2026-10-10&to=2026-10-12"))
+        .get("owner", &changes(s, "from=2026-10-12&to=2026-10-14"))
         .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     let j = r.json();
@@ -387,7 +521,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     assert_eq!(j["lead_days"], json!([0, 1, 2, 3, 4, 5, 6, 7]));
     let days = j["days"].as_array().unwrap();
     assert_eq!(days.len(), 3);
-    assert_eq!(days[0]["date"], "2026-10-10");
+    assert_eq!(days[0]["date"], "2026-10-12");
     for d in days {
         for k in ["precip_in", "prob_precip_max", "tmax_f", "tmin_f"] {
             assert_eq!(d[k].as_array().unwrap().len(), 8, "{k}");
@@ -401,8 +535,8 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
         .to_owned();
     assert!(
         q.contains("models=gfs_seamless")
-            && q.contains("start_date=2026-10-09")
-            && q.contains("end_date=2026-10-13"),
+            && q.contains("start_date=2026-10-11")
+            && q.contains("end_date=2026-10-15"),
         "{q}"
     );
     assert_eq!(q.matches("previous_day").count(), 21, "{q}");
@@ -417,7 +551,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     // Two hours of caching.
     w.clock.advance(Cd::minutes(119));
     assert_eq!(
-        w.get("owner", &changes(s, "from=2026-10-10&to=2026-10-12"))
+        w.get("owner", &changes(s, "from=2026-10-12&to=2026-10-14"))
             .await
             .status,
         StatusCode::OK
@@ -425,7 +559,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     assert_eq!(stub.hits("/previous").await, 1);
     w.clock.advance(Cd::minutes(2));
     assert_eq!(
-        w.get("owner", &changes(s, "from=2026-10-10&to=2026-10-12"))
+        w.get("owner", &changes(s, "from=2026-10-12&to=2026-10-14"))
             .await
             .status,
         StatusCode::OK
@@ -433,14 +567,14 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     assert_eq!(stub.hits("/previous").await, 2);
 
     for q in [
-        "from=2026-10-12&to=2026-10-10",
-        "from=2026-10-01&to=2026-10-15",
+        "from=2026-10-14&to=2026-10-12",
+        "from=2026-10-03&to=2026-10-17",
         "from=2023-12-31&to=2024-01-02",
-        "from=2026-10-10&to=2026-11-05",
-        "from=2026-10-10",
-        "to=2026-10-10",
-        "from=bad&to=2026-10-10",
-        "from=2026-10-10&to=2026-10-12&x=1",
+        "from=2026-10-12&to=2026-11-05",
+        "from=2026-10-12",
+        "to=2026-10-12",
+        "from=bad&to=2026-10-12",
+        "from=2026-10-12&to=2026-10-14&x=1",
     ] {
         assert_eq!(
             w.get("owner", &changes(s, q)).await.status.as_u16(),
@@ -450,7 +584,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     }
     // The widest allowed window (14 days) works.
     assert_eq!(
-        w.get("owner", &changes(s, "from=2026-10-03&to=2026-10-16"))
+        w.get("owner", &changes(s, "from=2026-10-11&to=2026-10-24"))
             .await
             .status,
         StatusCode::OK
@@ -547,12 +681,12 @@ async fn one_user_cannot_drain_the_forecast_budget(db: PgPool) {
         let path = if i % 2 == 0 {
             fpath(s)
         } else {
-            changes(s, "from=2026-10-10&to=2026-10-12")
+            changes(s, "from=2026-10-12&to=2026-10-14")
         };
         assert_eq!(w.get("owner", &path).await.status, StatusCode::OK, "{i}");
     }
     let hits = stub.server.received_requests().await.unwrap().len();
-    for path in [fpath(s), changes(s, "from=2026-10-10&to=2026-10-12")] {
+    for path in [fpath(s), changes(s, "from=2026-10-12&to=2026-10-14")] {
         let r = w.get("owner", &path).await;
         assert_eq!(
             (r.status.as_u16(), r.code().as_str()),
@@ -647,6 +781,36 @@ async fn replay_serves_a_forecast_starting_today(db: PgPool) {
     let j = r.json();
     assert_eq!(j["deterministic"]["daily"][0]["date"], "2026-10-17");
     assert!(j["ensemble"]["daily"][0]["date"].as_str().unwrap() >= "2026-10-17");
+    // Replay shifts sunrise and sunset with the days: each one falls on its own local date.
+    let tz: chrono_tz::Tz = "America/Denver".parse().unwrap();
+    for day in j["deterministic"]["daily"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .take(3)
+    {
+        let date: chrono::NaiveDate = day["date"].as_str().unwrap().parse().unwrap();
+        for k in ["sunrise", "sunset"] {
+            let t = chrono::DateTime::parse_from_rfc3339(day[k].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&tz);
+            assert_eq!(t.date_naive(), date, "{k} on {date}");
+        }
+    }
+    // The running total starts at the first step not in the past: 17 Oct 12:00 UTC (the test clock) is step 6 of
+    // the shifted series, which starts at 06:00 UTC (local midnight). Earlier steps are null.
+    let d = &j["deterministic"]["hourly"];
+    let step = d["time"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|t| t == "2026-10-17T12:00:00Z")
+        .unwrap();
+    assert_eq!(step, 6);
+    assert!(d["precip_accum_in"].as_array().unwrap()[..step]
+        .iter()
+        .all(Value::is_null));
+    assert_eq!(d["precip_accum_in"][step], d["precip_in"][step]);
     let r = w
         .get("owner", &changes(s, "from=2026-10-10&to=2026-10-16"))
         .await;

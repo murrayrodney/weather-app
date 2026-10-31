@@ -1,26 +1,24 @@
 <script lang="ts">
-  import { page } from '$app/state';
-  import { getForecast, getForecastChanges, getStation } from '$lib/api/endpoints';
+  import { getForecast, getForecastChanges } from '$lib/api/endpoints';
   import { ApiError } from '$lib/api/errors';
-  import { isUuid } from '$lib/api/ids';
+  import type { Station } from '$lib/api/types';
   import ForecastChangesChart from '$lib/charts/ForecastChangesChart.svelte';
   import ForecastChart from '$lib/charts/ForecastChart.svelte';
-  import ErrorPanel from '$lib/components/ErrorPanel.svelte';
-  import LoadingBlock from '$lib/components/LoadingBlock.svelte';
   import { FEATURES, FORECAST_CHANGES_DAYS } from '$lib/config';
   import { createResource } from '$lib/data/resource.svelte';
   import { addDays, daysBetween, localDate } from '$lib/transforms/dates';
+  import ErrorPanel from './ErrorPanel.svelte';
+  import LoadingBlock from './LoadingBlock.svelte';
 
-  const id = $derived(page.params.id ?? '');
-  const valid = $derived(isUuid(id));
+  // The forecast and forecast-change sections of the station page (the first two sections, anchors #forecast and #changes).
+  let { station }: { station: Station } = $props();
 
-  const station = createResource(async (signal) => (isUuid(page.params.id) ? getStation(page.params.id!, signal) : null));
-  const today = $derived(localDate(station.data?.timezone ?? 'UTC'));
+  const today = $derived(localDate(station.timezone));
 
   let fromInput = $state('');
   let toInput = $state('');
   $effect(() => {
-    if (station.data && !fromInput) {
+    if (!fromInput) {
       fromInput = today;
       toInput = addDays(today, FORECAST_CHANGES_DAYS - 1);
     }
@@ -38,41 +36,32 @@
 
   // The two forecast routes share one per-user limiter (20/min, burst 10): load them one after the other.
   const forecast = createResource(async (signal) => {
-    const st = station.data;
-    if (!st || !FEATURES.forecast) return null;
-    return getForecast(st.id, signal);
+    const id = station.id;
+    if (!FEATURES.forecast) return null;
+    return getForecast(id, signal);
   });
   const changes = createResource(async (signal) => {
-    const st = station.data;
+    const id = station.id;
     const f = from;
     const t = to;
     const problem = rangeProblem;
     const fcStatus = forecast.status;
-    if (!st || !FEATURES.forecast || problem || fcStatus === 'loading') return null;
-    return getForecastChanges(st.id, f, t, signal);
+    if (!FEATURES.forecast || problem || fcStatus === 'loading') return null;
+    return getForecastChanges(id, f, t, signal);
   });
   const pastNullProb = $derived(
     from < today && (changes.data?.days ?? []).some((d) => d.date < today && d.prob_precip_max.some((v) => v === null))
   );
 </script>
 
-<main class="page">
-  {#if !valid}
-    <h1>Forecast</h1>
-    <p>That isn't available.</p>
-    <p><a href="/">Back to the dashboard</a></p>
-  {:else if !FEATURES.forecast}
+{#if !FEATURES.forecast}
+  <section id="forecast" class="station-section">
+    <h2>Forecast</h2>
     <p>Forecasts are not enabled.</p>
-  {:else if station.status === 'loading'}
-    <LoadingBlock />
-  {:else if station.status === 'error'}
-    <ErrorPanel error={station.error} onretry={() => station.reload()} />
-    <p><a href="/">Back to the dashboard</a></p>
-  {:else if station.data}
-    <h1>{station.data.name}: forecast</h1>
-    <p><a href={'/stations/' + station.data.id}>Back to the station</a></p>
-
-    <h2>Live forecast</h2>
+  </section>
+{:else}
+  <section id="forecast" class="station-section" data-testid="forecast-section">
+    <h2>Forecast</h2>
     {#if forecast.status === 'loading'}
       <LoadingBlock label="Loading forecast..." />
     {:else if forecast.status === 'error'}
@@ -80,7 +69,9 @@
     {:else if forecast.data}
       <ForecastChart forecast={forecast.data} />
     {/if}
+  </section>
 
+  <section id="changes" class="station-section" data-testid="changes-section">
     <h2>How the forecast changed</h2>
     <div class="controls">
       <label class="small">From <input type="date" min="2024-01-01" bind:value={fromInput} placeholder={today} /></label>
@@ -97,5 +88,5 @@
     {:else if changes.data}
       <ForecastChangesChart changes={changes.data} {pastNullProb} />
     {/if}
-  {/if}
-</main>
+  </section>
+{/if}

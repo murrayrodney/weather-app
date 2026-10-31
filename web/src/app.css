@@ -1,22 +1,79 @@
+/* Proposal 08 section 3 (red-and-blue theme, light mode only). Every --c-* token is classified in
+   web/src/test/contrast.test.ts, which also checks the text and UI pairs against WCAG 2.x. */
 :root {
-  --bg: #f6f7f9;
+  /* UI */
+  --bg: #f5f7f9;
   --surface: #ffffff;
-  --text: #1c2430;
-  --muted: #566070;
-  --border: #d5dae1;
-  --accent: #1d5b8a;
+  --text: #1e2e36;
+  --muted: #4a5a63;
+  --border: #d3dbe0;
+  --border-strong: #6b7a83;
+  --primary: #0b6ea3;
+  --primary-hover: #0a5f8f;
+  --primary-tint: #e3f0f8;
   --accent-text: #ffffff;
-  --danger: #a12622;
+  --brand: #c8102e;
+  --danger: #c8102e;
+  --danger-bg: #fbe9ec;
   --ok: #1b6b3a;
+  --warn: #6b5f00;
   --warn-bg: #fff4d6;
-  --info-bg: #e8f1f8;
-  --c-current: #0b4f8a;
-  --c-prior: #7b8492;
-  --c-median: #b35c00;
-  --c-band-outer: #c7d9ea;
-  --c-band-inner: #9dbddb;
+  --info-bg: #e3f0f8;
+  --focus: #0b6ea3;
+  /* option B header (proposal 08 section 3.3) */
+  --header: #0a4f78;
+  --header-text: #ffffff;
+  --header-link: #d6e6f1;
+  --header-indicator: #ff8a9b;
+  /* icons and day strip (not series; see contrast.test.ts) */
+  --icon-sun: #f2b233;
+  --icon-sun-edge: #c98a0b;
+  --icon-cloud: #dfe5ec;
+  --icon-ink: #6b7585;
+  --icon-snow: #5a7fa3;
+  --icon-bolt: #e0a41a;
+  --icon-bolt-edge: #b07a06;
+  --day-cell: #eef2f7;
+  --day-snow: #3d6a93;
+  --grid-line: #e8ebf0;
+  /* chart tokens: "line" must reach 3:1 on each backdrop it is drawn over (white, --c-night, --c-cloud) */
+  --c-forecast: #293e47;
+  --c-median: #8a7a00;
+  --c-feels: #8e1aa0;
+  --c-dew: #1180b5;
+  --c-freeze: #6b7a83;
+  --c-rain-bar: #1180b5;
+  --c-accum: #0a4f78;
+  --c-prob: #8a7a00;
+  --c-snow: #8cbbd9; /* fill */
+  --c-snow-outline: #2f6f93;
+  --c-humidity: #1e7f2b;
+  --c-pressure: #293e47;
+  --c-wind: #0a4f78;
+  --c-gust: #3d86b0;
+  --c-arrow: #293e47;
+  --c-tmax: #8a7a00;
+  --c-tmin: #1180b5;
+  --c-current: #0b6ea3;
+  --c-prior: #6b7a83;
+  --c-lead-0: #0a3a5c;
+  --c-lead-1: #0a4f78;
+  --c-lead-2: #0b6ea3;
+  --c-lead-3: #0b6ea3;
+  --c-lead-4: #3d86b0;
+  --c-lead-5: #0b6ea3;
+  --c-lead-6: #3d86b0;
+  --c-lead-7: #6b7a83;
+  --c-now: #c8102e;
+  --c-crosshair: #1e2e36;
+  /* fills */
+  --c-band-outer: #e4f0f8; /* lightened so the 3:1 line floor holds on the bands (contrast.test.ts) */
+  --c-band-inner: #c4dded;
+  --c-band-tmax: #f6eed2; /* daily high band: a tint of gold */
+  --c-band-tmin: #d6e9f5; /* daily low band: a tint of blue */
+  --c-cloud: #d5dce2;
+  --c-night: #e4e9ed;
   --c-winter: #e6e9ee;
-  --c-forecast: #1c2430;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -34,7 +91,19 @@ body {
   display: contents;
 }
 a {
-  color: var(--accent);
+  color: var(--primary);
+}
+a:hover {
+  text-decoration: underline;
+}
+p a,
+.banner a,
+.state-note a {
+  text-decoration: underline;
+}
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 h1 {
   font-size: 1.5rem;
@@ -48,32 +117,59 @@ h3 {
   font-size: 1rem;
   margin: 0.75rem 0 0.25rem;
 }
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 /* layout */
 .site-nav {
   display: flex;
   gap: 1rem;
   align-items: center;
   padding: 0.6rem 1.25rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  background: var(--header);
+  color: var(--header-text);
+}
+.site-nav a {
+  color: var(--header-link);
+  text-decoration: none;
+  padding: 0.3rem 0;
+}
+.site-nav a:hover {
+  color: var(--header-text);
+  text-decoration: underline;
+}
+/* the current page: white text and a 3 px light-red underline (proposal 08, header option B) */
+.site-nav a[aria-current='page'] {
+  color: var(--header-text);
+  box-shadow: inset 0 -3px 0 var(--header-indicator);
 }
 .site-nav .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   font-weight: 700;
-  text-decoration: none;
-  color: var(--text);
+  color: var(--header-text);
   margin-right: 0.5rem;
+}
+/* logo mark: a brand-red disc with a white ring */
+.site-nav .brand-mark {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 0 2px var(--header-text);
+}
+.site-nav :focus-visible {
+  outline-color: var(--header-text);
 }
 .site-nav .spacer {
   flex: 1;
+}
+.site-nav button.secondary {
+  background: transparent;
+  color: var(--header-text);
+  border-color: var(--header-link);
+}
+.site-nav button.secondary:hover:not(:disabled) {
+  background: var(--primary-hover);
+  border-color: var(--header-link);
 }
 .page {
   padding: 1rem 1.25rem 2rem;
@@ -104,43 +200,64 @@ h3 {
 }
 .tabs {
   display: inline-flex;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   overflow: hidden;
 }
 .tabs button {
   border: 0;
-  background: var(--surface);
+  background: transparent;
   padding: 0.35rem 0.9rem;
   cursor: pointer;
   font: inherit;
-  color: var(--text);
+  color: var(--muted);
 }
+.tabs button:hover:not(:disabled) {
+  background: var(--primary-tint);
+  color: var(--primary);
+}
+/* selected: primary-tint, primary text and a 3 px red bar along the bottom edge (proposal 08 section 3.3) */
 .tabs button[aria-pressed='true'] {
-  background: var(--accent);
-  color: var(--accent-text);
+  background: var(--primary-tint);
+  color: var(--primary);
+  font-weight: 600;
+  box-shadow: inset 0 -3px 0 var(--brand);
 }
 button,
 .button {
   font: inherit;
   padding: 0.4rem 0.9rem;
   border-radius: 6px;
-  border: 1px solid var(--accent);
-  background: var(--accent);
+  border: 1px solid var(--primary);
+  background: var(--primary);
   color: var(--accent-text);
   cursor: pointer;
   text-decoration: none;
   display: inline-block;
 }
+button:hover:not(:disabled),
+.button:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
 button.secondary,
 .button.secondary {
   background: var(--surface);
-  color: var(--accent);
+  color: var(--primary);
+}
+button.secondary:hover:not(:disabled),
+.button.secondary:hover {
+  background: var(--primary-tint);
+  border-color: var(--primary);
 }
 button.danger {
   background: var(--surface);
   border-color: var(--danger);
   color: var(--danger);
+}
+button.danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+  border-color: var(--danger);
 }
 button:disabled {
   opacity: 0.55;
@@ -209,26 +326,14 @@ label.field select {
 }
 
 /* dashboard grid */
+/* Columns fit the container: as many 320 px tracks as fit (one track per station at most), so a fixed column count
+   never overflows the 1024 to 1400 px desktop widths (the old 420 px minimum clipped the third card at 1280 px). */
 .grid {
   display: grid;
   gap: 1rem;
   align-items: start;
   overflow-x: auto;
-}
-.grid.cols-1 {
-  grid-template-columns: repeat(1, minmax(420px, 1fr));
-}
-.grid.cols-2 {
-  grid-template-columns: repeat(2, minmax(420px, 1fr));
-}
-.grid.cols-3 {
-  grid-template-columns: repeat(3, minmax(420px, 1fr));
-}
-.grid.cols-4 {
-  grid-template-columns: repeat(4, minmax(420px, 1fr));
-}
-.grid.cols-5 {
-  grid-template-columns: repeat(5, minmax(420px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
 }
 .station-head {
   display: flex;
@@ -253,39 +358,320 @@ label.field select {
   font-size: 11px;
   fill: var(--muted);
 }
+/* forecast charts (proposal 07 phase 3) are drawn at 1:1 pixels: their width is measured, not scaled */
+.chart-svg.plot {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+}
+.chart-svg.plot text {
+  font-size: 12px;
+}
+.stack-wrap {
+  position: relative;
+}
+.stack-readout {
+  margin: 0.35rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.stack-readout p {
+  margin: 0 0 0.2rem;
+}
+.page-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+}
+.page-nav button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.page-range {
+  color: var(--muted);
+}
+.chart-svg .panel-bg {
+  fill: var(--surface);
+}
+.chart-svg .panel-frame {
+  fill: none;
+  stroke: var(--border);
+}
+.chart-svg .night {
+  fill: var(--c-night);
+}
+.chart-svg .day-line {
+  stroke: var(--border);
+  stroke-dasharray: 2 3;
+}
+.chart-svg .panel-unit {
+  font-weight: 600;
+  fill: var(--muted);
+}
+.chart-svg .now-line {
+  stroke: var(--c-now);
+  stroke-width: 1.5;
+}
+.chart-svg .now-label {
+  fill: var(--c-now);
+  font-weight: 600;
+}
+.chart-svg .crosshair {
+  stroke: var(--c-crosshair);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+/* Chart tooltips (proposal 08 section 2): one box per panel, drawn last in the chart's SVG. Classes only (no style
+   attribute, so the CSP holds); pointer-events off so the box never takes the pointer from the chart. */
+.chart-svg .tip {
+  pointer-events: none;
+}
+.chart-svg .tip-bg {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+.chart-svg .tip-title {
+  fill: var(--text);
+  font-weight: 600;
+}
+.chart-svg .tip-label,
+.chart-svg .tip-value {
+  fill: var(--text);
+}
+.chart-svg .ref-freeze {
+  fill: none;
+  stroke: var(--c-freeze);
+  stroke-width: 1;
+  stroke-dasharray: 6 6;
+}
+.chart-svg .line-feels {
+  fill: none;
+  stroke: var(--c-feels);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.chart-svg .line-dew {
+  fill: none;
+  stroke: var(--c-dew);
+  stroke-width: 1.5;
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+}
+/* proposal 07 phase 4: precipitation (bars, accumulated total, chance), sky and wind panels */
+.chart-svg .range-precip {
+  fill: none;
+  stroke: var(--c-band-inner);
+  stroke-width: 2.5;
+}
+.chart-svg .bar-precip {
+  fill: var(--c-rain-bar);
+}
+/* snow: the bar's fill is the hatch pattern (set as an attribute, with a unique id per stack), so no fill here */
+.chart-svg .bar-snow {
+  stroke: var(--c-snow-outline);
+  stroke-width: 0.5;
+}
+.chart-svg .snow-bg {
+  fill: var(--c-snow);
+}
+.chart-svg .snow-hatch {
+  stroke: var(--c-snow-outline);
+  stroke-width: 1;
+}
+.chart-svg .band-accum {
+  fill: var(--c-band-outer);
+}
+.chart-svg .line-accum {
+  fill: none;
+  stroke: var(--c-accum);
+  stroke-width: 2;
+  stroke-dasharray: 6 3;
+}
+.chart-svg .line-prob {
+  fill: none;
+  stroke: var(--c-prob);
+  stroke-width: 1.2;
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+}
+.chart-svg .area-cloud {
+  fill: var(--c-cloud);
+  opacity: 0.85;
+}
+.chart-svg .line-humidity {
+  fill: none;
+  stroke: var(--c-humidity);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
+}
+.chart-svg .line-pressure {
+  fill: none;
+  stroke: var(--c-pressure);
+  stroke-width: 1.5;
+  stroke-dasharray: 8 3 1 3;
+}
+.chart-svg .line-wind {
+  fill: none;
+  stroke: var(--c-wind);
+  stroke-width: 1.5;
+}
+.chart-svg .line-gust {
+  fill: none;
+  stroke: var(--c-gust);
+  stroke-width: 1;
+  stroke-dasharray: 5 3;
+}
+.chart-svg .wind-arrow {
+  fill: var(--c-arrow);
+}
+.chart-svg .day-cell {
+  fill: var(--day-cell);
+}
+.chart-svg .day-date {
+  font-weight: 700;
+  fill: var(--text);
+}
+.chart-svg .day-text,
+.chart-svg .day-hilo {
+  fill: var(--text);
+}
+.chart-svg .day-hilo {
+  font-weight: 600;
+}
+.chart-svg .day-snow {
+  fill: var(--day-snow);
+  font-weight: 600;
+}
+.icon-sun {
+  fill: var(--icon-sun);
+  stroke: var(--icon-sun-edge);
+  stroke-width: 1;
+}
+.icon-sun-ray {
+  fill: none;
+  stroke: var(--icon-sun-edge);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+.icon-cloud {
+  fill: var(--icon-cloud);
+  stroke: var(--icon-ink);
+  stroke-width: 1;
+}
+.icon-fog {
+  fill: none;
+  stroke: var(--icon-ink);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.icon-rain {
+  fill: none;
+  stroke: var(--c-rain-bar);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.icon-rain-dot {
+  fill: var(--c-rain-bar);
+}
+.icon-snow {
+  fill: none;
+  stroke: var(--icon-snow);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+.icon-bolt {
+  fill: var(--icon-bolt);
+  stroke: var(--icon-bolt-edge);
+  stroke-width: 0.6;
+}
+.icon-unknown {
+  fill: none;
+  stroke: var(--muted);
+}
+.forecast-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.forecast-row .row-title {
+  font-size: 1rem;
+  margin: 0 0 0.35rem;
+}
+/* station page sections: sticky sub-nav with in-page anchors */
+.section-nav {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 1.25rem;
+  padding: 0.5rem 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.section-nav a {
+  font-weight: 600;
+}
+.station-section {
+  scroll-margin-top: 3.25rem;
+}
 .chart-svg .axis line,
 .chart-svg .axis path {
   stroke: var(--border);
 }
 .chart-svg .grid-line {
-  stroke: #e8ebf0;
+  stroke: var(--grid-line);
 }
 .chart-svg .winter {
   fill: var(--c-winter);
   opacity: 0.7;
 }
+/* no opacity on the bands: the lines drawn over them are tested against the token colour itself */
 .chart-svg .band-outer {
   fill: var(--c-band-outer);
-  opacity: 0.8;
 }
 .chart-svg .band-inner {
   fill: var(--c-band-inner);
-  opacity: 0.8;
 }
 .chart-svg path.line {
   fill: none;
   stroke-linejoin: round;
 }
+/* Dash patterns (proposal 08 section 3.4): within one panel every line has a distinct dash, so colour is never the only
+   channel. contrast.test.ts reads these rules (PANEL_LINES) and fails if two lines in a panel share a pattern. */
 .chart-svg .line-median {
   fill: none;
   stroke: var(--c-median);
   stroke-width: 1.5;
+  stroke-dasharray: 10 3;
 }
+/* no opacity on these two: a line's contrast must hold at full strength (contrast.test.ts) */
 .chart-svg .line-prior {
   fill: none;
   stroke: var(--c-prior);
   stroke-width: 1;
-  opacity: 0.55;
+  stroke-dasharray: 2 2;
+}
+/* daily view: high is solid gold, low is dashed blue, each over its own band */
+.chart-svg .line-tmax {
+  fill: none;
+  stroke: var(--c-tmax);
+  stroke-width: 1.5;
+}
+.chart-svg .line-tmin {
+  fill: none;
+  stroke: var(--c-tmin);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
+}
+.chart-svg .band-tmax {
+  fill: var(--c-band-tmax);
+}
+.chart-svg .band-tmin {
+  fill: var(--c-band-tmin);
 }
 .chart-svg .line-current {
   fill: none;
@@ -297,16 +683,11 @@ label.field select {
   stroke: var(--c-current);
   stroke-width: 2.5;
   stroke-dasharray: 4 3;
-  opacity: 0.55;
 }
 .chart-svg .line-forecast {
   fill: none;
   stroke: var(--c-forecast);
   stroke-width: 1.5;
-}
-.chart-svg .cursor {
-  stroke: var(--muted);
-  stroke-dasharray: 2 2;
 }
 .chart-svg .point {
   fill: var(--c-current);
@@ -318,6 +699,7 @@ label.field select {
 .chart-svg .marker {
   fill: var(--c-median);
 }
+/* lead lines are opaque: each lead has its own token and width (contrast.test.ts checks each on white and night) */
 .chart-svg .line-lead-0,
 .chart-svg .line-lead-1,
 .chart-svg .line-lead-2,
@@ -327,68 +709,56 @@ label.field select {
 .chart-svg .line-lead-6,
 .chart-svg .line-lead-7 {
   fill: none;
-  stroke: var(--c-current);
 }
+/* Each lead has its own width and dash (contrast.test.ts requires distinct dashes within the panel). The colours
+   alone do not separate neighbouring leads, so the legend and tooltip carry the identity too. */
 .chart-svg .line-lead-0 {
-  stroke-width: 3;
-  opacity: 1;
+  stroke: var(--c-lead-0);
+  stroke-width: 2.5;
 }
 .chart-svg .line-lead-1 {
-  stroke-width: 2.2;
-  opacity: 0.9;
+  stroke: var(--c-lead-1);
+  stroke-width: 2;
+  stroke-dasharray: 10 3;
 }
 .chart-svg .line-lead-2 {
-  stroke-width: 2;
-  opacity: 0.8;
+  stroke: var(--c-lead-2);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
 }
 .chart-svg .line-lead-3 {
-  stroke-width: 1.8;
-  opacity: 0.7;
+  stroke: var(--c-lead-3);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
 }
 .chart-svg .line-lead-4 {
-  stroke-width: 1.6;
-  opacity: 0.6;
+  stroke: var(--c-lead-4);
+  stroke-width: 1.5;
+  stroke-dasharray: 8 3 1 3;
 }
 .chart-svg .line-lead-5 {
-  stroke-width: 1.4;
-  opacity: 0.5;
+  stroke: var(--c-lead-5);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
 }
 .chart-svg .line-lead-6 {
-  stroke-width: 1.2;
-  opacity: 0.4;
+  stroke: var(--c-lead-6);
+  stroke-width: 1.5;
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
 }
 .chart-svg .line-lead-7 {
-  stroke-width: 1;
-  opacity: 0.3;
+  stroke: var(--c-lead-7);
+  stroke-width: 1.5;
+  stroke-dasharray: 12 3 3 3;
 }
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 1rem;
-  font-size: 0.8rem;
-  color: var(--muted);
-  margin: 0.25rem 0;
+/* chart legends (ChartLegend.svelte): the swatch uses the series' own class; the label is text */
+.chart-svg .legend-label {
+  font-size: 12px;
+  fill: var(--text);
 }
-.legend .swatch {
-  display: inline-block;
-  width: 1.5rem;
-  height: 0;
-  border-top: 3px solid var(--c-current);
-  vertical-align: middle;
-  margin-right: 0.3rem;
-}
-.legend .swatch.prior {
-  border-top: 1px solid var(--c-prior);
-}
-.legend .swatch.median {
-  border-top: 2px solid var(--c-median);
-}
-.legend .swatch.partial {
-  border-top: 3px dashed var(--c-current);
-  opacity: 0.55;
-}
-.legend .swatch.band {
-  border-top: 8px solid var(--c-band-outer);
+.chart-svg .legend-band {
+  fill: var(--surface);
 }
 .readout {
   font-size: 0.85rem;
@@ -456,16 +826,13 @@ ul.plain li {
   color: var(--ok);
 }
 .badge.pending {
-  border-color: var(--c-median);
-  color: var(--c-median);
+  border-color: var(--warn);
+  color: var(--warn);
 }
 .badge.declined,
 .badge.revoked {
   border-color: var(--danger);
   color: var(--danger);
-}
-.row-gap > * + * {
-  margin-left: 0.5rem;
 }
 .inline-form {
   display: flex;

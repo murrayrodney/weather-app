@@ -118,7 +118,8 @@ async fn build_env(mut cfg: PollerConfig, pool_max: u32, cancel: CancellationTok
         keys,
         pings,
         cancel,
-    ))
+    )
+    .with_awn_mode(cfg.awn_mode))
 }
 
 async fn run(command: Option<Command>) -> Result<ExitCode> {

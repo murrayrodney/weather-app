@@ -34,6 +34,14 @@ export async function fakeSession(page: Page) {
   });
 }
 
+/**
+ * Mocks the per-station forecast (the dashboard's Forecast tab loads one per station on every sign-in).
+ * Specs that sign in many times as alex use this so the general per-user limiter is not spent on forecasts.
+ */
+export async function mockForecasts(page: Page) {
+  await page.route('**/api/v1/stations/*/forecast', (r) => json(r, fx.forecast()));
+}
+
 /** Fresh UI login (for destructive specs that must not burn the shared storageState sessions). */
 export async function loginUi(page: Page, email: string, password: string) {
   await page.goto('/login');
