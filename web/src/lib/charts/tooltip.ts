@@ -65,12 +65,12 @@ export function tipWidth(box: TipBox): number {
   return Math.max(rowsWide, titleWide);
 }
 
-/** A value as the readouts print it: fixed decimals and a unit, or "no value" when the step is missing. */
+/** A value as the tooltips print it: fixed decimals and a unit, or "no value" when the step is missing. */
 export function fmtValue(v: number | null | undefined, digits: number, suffix: string): string {
   return typeof v === 'number' ? `${v.toFixed(digits)}${suffix}` : 'no value';
 }
 
-/** A p10-p90 pair as "58 F to 70 F", the wording the readouts use. */
+/** A p10-p90 pair as "58 F to 70 F", the wording the tooltips use. */
 export function fmtRange(lo: number | null | undefined, hi: number | null | undefined, digits: number, suffix: string): string {
   return `${fmtValue(lo, digits, suffix)} to ${fmtValue(hi, digits, suffix)}`;
 }
@@ -85,10 +85,15 @@ export function tipDate(ymd: string): string {
   return `${get('weekday')} ${get('month')} ${get('day')}`;
 }
 
-/** A tooltip box as one readout sentence, for the chart's aria-live line: "Fri Jul 10: High 80 F, Low 50 F." */
+/** A tooltip box's rows as one sentence without the title: "High 80 F, Low 50 F." (or "no values." when there are none). */
+export function tipBody(box: TipBox): string {
+  if (box.rows.length === 0) return 'no values.';
+  return `${box.rows.map((r) => `${r.label} ${r.value}`).join(', ')}.`;
+}
+
+/** A tooltip box as one sentence, for a slider's aria-valuetext (the screen-reader value): "Fri Jul 10: High 80 F, Low 50 F." */
 export function tipText(box: TipBox): string {
-  if (box.rows.length === 0) return `${box.title}: no values.`;
-  return `${box.title}: ${box.rows.map((r) => `${r.label} ${r.value}`).join(', ')}.`;
+  return `${box.title}: ${tipBody(box)}`;
 }
 
 /** The hour of a UTC instant in a zone, as the tooltip title: "Tue Oct 27, 3 PM". Built from parts, so no comma after the weekday. */

@@ -68,6 +68,7 @@
     <p><a href="/">Back to the dashboard</a></p>
   {:else if station.data}
     {@const s = station.data}
+    <p class="eyebrow">Station</p>
     <h1>{s.name}</h1>
     <nav class="section-nav" aria-label="Station sections">
       {#if FEATURES.forecast}

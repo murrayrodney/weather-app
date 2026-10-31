@@ -64,7 +64,6 @@
     if (i === null || !day) return null;
     return { title: tipDate(day.date), rows: changeRows(changes.lead_days, metric, day) };
   });
-  const readout = $derived(tip ? tipText(tip) : 'Move the pointer across the chart, or focus it and use the left and right arrow keys, to read each lead for a date.');
   // One swatch per lead, drawn with the lead's own class (width and dash), so the legend matches the lines.
   const legendItems = $derived<LegendItem[]>(changes.lead_days.map((n) => ({ label: leadLabel(n), mark: 'line', cls: 'line-lead-' + n })));
   // The legend spans the plot (between its left and right margins), so no item runs past the plot's right edge.
@@ -102,7 +101,7 @@
       aria-valuemin={0}
       aria-valuemax={Math.max(changes.days.length - 1, 0)}
       aria-valuenow={hover ?? undefined}
-      aria-valuetext={readout}
+      aria-valuetext={tip ? tipText(tip) : undefined}
       data-testid="changes-chart"
       onpointermove={(e) => xh.onhover(pointerPx(e))}
       onpointerleave={() => xh.onhover(null)}
@@ -126,7 +125,6 @@
         <ChartTooltip box={tip} anchorX={hoverPx} plotLeft={M.l} plotRight={width - M.r} top={M.t} bottom={H - M.b} testid="tip-changes" />
       {/if}
     </svg>
-    <p class="readout" data-testid="changes-readout">{readout}</p>
   </div>
   <div class="table-scroll">
     <table class="data" data-testid="changes-table">

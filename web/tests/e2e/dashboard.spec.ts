@@ -154,12 +154,12 @@ test('mocked: full fixture shows provenance, bands, priors, current, table value
   expect(urls.length).toBe(2);
 });
 
-test('mocked: cumulative tooltip: this year, median, band and prior years at the hovered day, the readout unchanged, a right-edge flip, arrows and Escape', async ({ page }) => {
+test('mocked: cumulative tooltip: this year, median, band and prior years at the hovered day, the same sentence as the slider value text, a right-edge flip, arrows and Escape', async ({ page }) => {
   await setup(page, fx.ytdFull());
   await gotoRain(page);
   const chart = page.getByTestId('station-ytd').first().locator('svg.chart-svg:not(.legend-row)').first();
   const tip = page.getByTestId('tip-cumulative').first();
-  const readout = page.getByTestId('readout').first();
+  const valuetext = () => chart.getAttribute('aria-valuetext').then((v) => v ?? '');
   // label to value, in row order (the labels and values are two lists of the same length)
   const rows = async () => {
     const labels = await tip.locator('text.tip-label').allTextContents();
@@ -171,13 +171,13 @@ test('mocked: cumulative tooltip: this year, median, band and prior years at the
   // x = 200 is inside the season (April 1 to July 10 is this year's line) and the prior years drawn are 2025 to 2022
   await chart.hover({ position: { x: 200, y: 100 } });
   await expect(tip).toBeVisible();
-  // the tooltip and the readout name the same day and the same this-year value
+  // the tooltip and the slider's value text name the same day and the same this-year value
   const title = (await tip.locator('text.tip-title').textContent()) ?? '';
   expect(title).not.toBe('');
-  await expect(readout).toContainText(`${title}: this year `);
+  await expect.poll(valuetext).toContain(`${title}: This year `);
   const r = await rows();
   expect(r['This year']).toMatch(/^-?\d+\.\d\d in$/);
-  await expect(readout).toContainText(`this year ${r['This year']}`);
+  await expect.poll(valuetext).toContain(`This year ${r['This year']}`);
   expect(r['Median']).toMatch(/ in$/);
   expect(r['Percentile band']).toMatch(/ in to .* in$/);
   expect(Object.keys(r)).toEqual(expect.arrayContaining(['This year', 'Median', 'Percentile band', '2025', '2024', '2023', '2022']));
@@ -197,10 +197,13 @@ test('mocked: cumulative tooltip: this year, median, band and prior years at the
   // arrows move the day; Escape clears
   await chart.focus();
   await page.keyboard.press('ArrowRight');
-  await expect(readout).toContainText('this year');
+  // the value text follows the arrow: it names the tooltip's day (a day with no data has no "This year" row)
+  await expect.poll(valuetext).not.toBe('');
+  const moved = (await valuetext()).split(':')[0];
+  expect(moved).toBe(((await tip.locator('text.tip-title').textContent()) ?? '').trim());
   await page.keyboard.press('Escape');
   await expect(tip).toHaveCount(0);
-  await expect(readout).toHaveText('');
+  await expect(chart).not.toHaveAttribute('aria-valuetext');
 });
 
 test('mocked: compact dashboard row: a temperature-only tooltip with forecast, ensemble median and range, feels like and dew point; a right-edge flip; arrows and Escape', async ({ page }) => {
@@ -217,9 +220,9 @@ test('mocked: compact dashboard row: a temperature-only tooltip with forecast, e
   // only the temperature panel has a tooltip in the compact row
   await expect(row.locator('[data-testid^="tip-"]')).toHaveCount(1);
   expect(await labels()).toEqual(['Forecast', 'Ensemble median', 'Range p10-p90', 'Feels like', 'Dew point']);
-  // the box matches the row's readout at the same hour
-  const readoutTemp = /temperature (-?\d+) F/.exec((await row.getByTestId('stack-readout').textContent()) ?? '')?.[1];
-  expect(await tip.locator('text.tip-value').first().textContent()).toBe(`${readoutTemp} F`);
+  // the box matches the row's slider value text at the same hour
+  const valueTemp = /Forecast (-?\d+) F/.exec((await slider.getAttribute('aria-valuetext')) ?? '')?.[1];
+  expect(await tip.locator('text.tip-value').first().textContent()).toBe(`${valueTemp} F`);
 
   const box = (await slider.boundingBox())!;
   await slider.hover({ position: { x: box.width - 120, y: 60 } });

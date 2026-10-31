@@ -260,7 +260,7 @@
   const nowPx = $derived(nowX(nowMs, startMs, endMs, layout.x));
   const pageLabel = $derived(tms.length ? `Showing ${formatDayTick(startMs, tz)} to ${formatDayTick(lastMs, tz)}` : '');
 
-  // Hover (pointer) or arrow keys pick one hourly step; the crosshair snaps to it, the tooltips and the readout name its values.
+  // Hover (pointer) or arrow keys pick one hourly step; the crosshair snaps to it and the tooltips name its values.
   const xh = useCrosshair({
     count: () => hw.time.length,
     stepAt: (px) => (layout.invertX(px) - startMs) / HOUR_MS,
@@ -276,8 +276,9 @@
   }
 
 
-  // One tooltip per panel (proposal 08 decision 2): each box lists its own panel's rows at the hovered hour, with the same
-  // numbers as the readout. The compact dashboard row has only the temperature panel, so it gets only the temperature box.
+  // One tooltip per panel (proposal 08 decision 2): each box lists its own panel's rows at the hovered hour. The stack's
+  // aria-valuetext (PanelStack) is built from these same boxes. The compact dashboard row has only the temperature panel,
+  // so it gets only the temperature box.
   const tips = $derived.by((): TipBox[] => {
     const i = hover;
     if (i === null || !det) return [];

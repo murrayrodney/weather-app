@@ -1,6 +1,6 @@
 // Shared crosshair for the hover and keyboard pattern (proposal 08 section 2.5): a pointer picks the step under it,
 // the arrow keys step through the steps, Escape clears. The chart keeps the returned object and passes `onhover` and
-// `onkey` to its PanelStack (or other slider), and reads `index` and `px` to draw the crosshair and its readout.
+// `onkey` to its PanelStack (or other slider), and reads `index` and `px` to draw the crosshair and its tooltip.
 interface CrosshairOptions {
   count: () => number; // how many steps the index runs over (0 means no steps)
   stepAt: (px: number) => number; // the continuous step under a pixel x; the helper rounds and clamps it

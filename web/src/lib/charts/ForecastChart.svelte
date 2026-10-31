@@ -118,8 +118,9 @@
   const xs = $derived((v: number) => sc.x(v));
   const ys = $derived((v: number) => sc.y(v));
 
-  // Hover or arrow keys pick one day (proposal 08 section 2.5): the crosshair snaps to it, and the tooltip and readout
-  // name its values. The tooltip follows the active tab: temperature rows on Temperature, precipitation rows on Precipitation.
+  // Hover or arrow keys pick one day (proposal 08 section 2.5): the crosshair snaps to it, and the tooltip names its
+  // values. The slider's aria-valuetext is the same box as one sentence. The tooltip follows the active tab:
+  // temperature rows on Temperature, precipitation rows on Precipitation.
   const days = $derived(det?.daily ?? ens?.daily ?? []);
   const xh = useCrosshair({ count: () => model.n, stepAt: (px) => sc.x.invert(px), xAt: (i) => sc.x(i) });
   const hover = $derived(xh.index);
@@ -135,7 +136,6 @@
     const rows = variable === 'temp' ? dailyTempRows(det?.daily[i], ens?.daily[i]) : dailyPrecipRows(det?.daily[i], ens?.daily[i]);
     return { title: tipDate(day.date), rows };
   });
-  const readout = $derived(tip ? tipText(tip) : 'Move the pointer across the chart, or focus it and use the left and right arrow keys, to read the values for each day.');
 
   /** Switches the horizon; the crosshair is cleared because it refers to the view it was drawn in. */
   function setHorizon(h: 'hourly' | 'daily') {
@@ -233,7 +233,7 @@
         aria-valuemin={0}
         aria-valuemax={Math.max(model.n - 1, 0)}
         aria-valuenow={hover ?? undefined}
-        aria-valuetext={readout}
+        aria-valuetext={tip ? tipText(tip) : undefined}
         data-testid="forecast-chart"
         onpointermove={(e) => xh.onhover(pointerPx(e))}
         onpointerleave={() => xh.onhover(null)}
@@ -259,7 +259,6 @@
           <ChartTooltip box={tip} anchorX={hoverPx} plotLeft={M.l} plotRight={width - M.r} top={M.t} bottom={DAILY_HEIGHT - M.b} testid="tip-daily" />
         {/if}
       </svg>
-      <p class="readout" data-testid="daily-readout">{readout}</p>
     </ChartFrame>
   </div>
 {/if}

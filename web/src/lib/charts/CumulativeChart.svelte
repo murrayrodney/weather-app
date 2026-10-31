@@ -13,7 +13,7 @@
   import { H, M, linePath, makeScales, ribbonPath } from './scales';
   import { cumulativeRows } from './tipRows';
   import { useCrosshair } from './useCrosshair.svelte';
-  import { type TipBox } from './tooltip';
+  import { tipText, type TipBox } from './tooltip';
 
   // Measured width, drawn at 1:1 pixels (like the other charts), so the 12 px text is not scaled with the card.
   const MAX_WIDTH = 1400;
@@ -112,7 +112,7 @@
   const legendWidth = $derived(width - M.l - M.r);
   const legendHeight = $derived(legendLayout(legendItems, legendWidth).height);
 
-  // Hover or arrow keys pick one day (proposal 08 section 2.5). The readout line and the tooltip name the same values.
+  // Hover or arrow keys pick one day (proposal 08 section 2.5). The tooltip names the values; the slider's aria-valuetext is the same box.
   const xh = useCrosshair({ count: () => slots.length, stepAt: (px) => sc.x.invert(px), xAt: (i) => sc.x(i) });
   const cursor = $derived(xh.index);
   const cursorX = $derived(xh.px);
@@ -124,15 +124,6 @@
   const fmt = (v: number | undefined | null) => (v === undefined || v === null ? '-' : v.toFixed(metric === 'rain' ? 2 : 0));
   const curByMd = $derived(new Map(ytd.current[field].map((p) => [p.md, p.v])));
   const bandRows = $derived(new Map((ytd.bands?.[field] ?? []).map((b) => [b.md, b.p])));
-  const readout = $derived.by(() => {
-    if (cursor === null || slots[cursor] === undefined) return '';
-    const md = slots[cursor];
-    const p = bandRows.get(md);
-    const ps = ytd.bands?.percentiles ?? [];
-    const med = p && ps.includes(50) ? p[ps.indexOf(50)] : undefined;
-    const range = p && ps.length >= 2 ? `${fmt(p[0])} to ${fmt(p[p.length - 1])}` : '-';
-    return `${mdLabel(md)}: this year ${fmt(curByMd.get(md))} ${valueLabel}; median ${fmt(med)}; band ${range}`;
-  });
   // The tooltip: this year (complete days), today (the open day), median, band range and each prior year drawn.
   const completeByMd = $derived(new Map(split.complete.map((p) => [p.md, p.v])));
   const partialByMd = $derived(new Map(split.partial.map((p) => [p.md, p.v])));
@@ -185,7 +176,7 @@
       aria-valuemin={0}
       aria-valuemax={Math.max(slots.length - 1, 0)}
       aria-valuenow={cursor ?? undefined}
-      aria-valuetext={readout}
+      aria-valuetext={tip ? tipText(tip) : undefined}
       onpointermove={(e) => xh.onhover(pointerPx(e))}
       onpointerleave={() => xh.onhover(null)}
       onkeydown={xh.onkey}
@@ -214,7 +205,6 @@
       {/if}
     </svg>
   </div>
-  <p class="readout" data-testid="readout">{readout}</p>
   <details class="data-table">
     <summary>Show data table</summary>
     <div class="table-scroll">

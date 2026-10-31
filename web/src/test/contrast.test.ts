@@ -2,22 +2,44 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// Proposal 08 section 4 ("Automated contrast check"). Reads the :root tokens from app.css, so a changed
-// colour is checked without editing this file. Opaque colours only: every token is a 6-digit hex.
+// Proposal 08 section 4 ("Automated contrast check"). Reads the token blocks from app.css, so a changed colour is
+// checked without editing this file. Opaque colours only: every token is a 6-digit hex. Every pair is checked in both
+// themes: light (:root), dark when chosen (:root[data-theme='dark']) and dark by default (the prefers-color-scheme block).
 
 const CSS = readFileSync(join(process.cwd(), 'src', 'app.css'), 'utf8');
 
-/** The :root custom properties, without comments. Name is without the leading "--". */
-export function parseRootTokens(css: string): Map<string, string> {
+/** Every rule in app.css as { selector, body }, comments stripped. Rules nested in @media are included; the
+ *  @media line itself is not a rule. Quotes in selectors are normalised to single quotes. */
+export function cssRules(css: string): { selector: string; body: string }[] {
   const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
-  const block = /:root\s*\{([^}]*)\}/.exec(stripped);
-  if (!block) throw new Error('app.css has no :root block');
+  return [...stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1].trim().replace(/"/g, "'"), body: m[2] }));
+}
+
+/** The custom properties of the rule whose selector is exactly `selector`. Name is without the leading "--". */
+export function tokensOf(css: string, selector: string): Map<string, string> {
+  const rules = cssRules(css).filter((r) => r.selector === selector);
+  if (rules.length === 0) throw new Error(`app.css has no "${selector}" rule`);
   const tokens = new Map<string, string>();
-  for (const m of block[1].matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/g)) tokens.set(m[1], m[2].trim());
+  for (const rule of rules) for (const m of rule.body.matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/g)) tokens.set(m[1], m[2].trim());
   return tokens;
 }
 
+/** The :root custom properties (the light theme). */
+export function parseRootTokens(css: string): Map<string, string> {
+  return tokensOf(css, ':root');
+}
+
+export const THEME_SELECTORS = {
+  light: ':root',
+  dark: ":root[data-theme='dark']",
+  darkByOs: ":root:not([data-theme='light'])"
+} as const;
+
 const TOKENS = parseRootTokens(CSS);
+const DARK_TOKENS = tokensOf(CSS, THEME_SELECTORS.dark);
+const DARK_OS_TOKENS = tokensOf(CSS, THEME_SELECTORS.darkByOs);
+/** The token sets checked. The OS-driven dark block is checked as its own set (it must equal the explicit one). */
+export const THEMES: Record<string, Map<string, string>> = { light: TOKENS, dark: DARK_TOKENS, darkByOs: DARK_OS_TOKENS };
 
 function hexToRgb(name: string, value: string): [number, number, number] {
   if (!/^#[0-9a-fA-F]{6}$/.test(value)) throw new Error(`--${name} is "${value}": only opaque #RRGGBB values are allowed`);
@@ -32,16 +54,46 @@ function luminance([r, g, b]: [number, number, number]): number {
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
 
+type Rgb = [number, number, number];
+
+function tokenRgb(tokens: Map<string, string>, n: string): Rgb {
+  const v = tokens.get(n);
+  if (v === undefined) throw new Error(`--${n} is not defined in its token block`);
+  return hexToRgb(n, v);
+}
+
+function ratio(a: Rgb, b: Rgb): number {
+  const x = luminance(a);
+  const y = luminance(b);
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+
 /** WCAG 2.x contrast ratio between two opaque tokens (names without "--"). */
 export function contrast(fgName: string, bgName: string, tokens: Map<string, string> = TOKENS): number {
-  const get = (n: string) => {
-    const v = tokens.get(n);
-    if (v === undefined) throw new Error(`--${n} is not defined in :root`);
-    return hexToRgb(n, v);
-  };
-  const a = luminance(get(fgName));
-  const b = luminance(get(bgName));
-  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  return ratio(tokenRgb(tokens, fgName), tokenRgb(tokens, bgName));
+}
+
+/** The `opacity` set on `.chart-svg .<cls>`, or null when the layer is opaque. */
+export function layerOpacity(css: string, cls: string): number | null {
+  let alpha: number | null = null;
+  for (const rule of chartRules(css, cls)) {
+    const m = /opacity:\s*([0-9.]+)/.exec(rule.body);
+    if (m) alpha = Number(m[1]);
+  }
+  return alpha;
+}
+
+/** Chart layers drawn with a CSS opacity over the white panel. A line over them sees the composited colour. */
+export const LAYER_CLASS: Record<string, string> = { 'c-winter': 'winter', 'c-cloud': 'area-cloud' };
+
+/** The colour a line really sees: the token, composited over the panel surface when its layer has an opacity. */
+export function backdropRgb(name: string, tokens: Map<string, string>, css: string = CSS): Rgb {
+  const base = tokenRgb(tokens, name);
+  const cls = LAYER_CLASS[name];
+  const alpha = cls ? layerOpacity(css, cls) : null;
+  if (alpha === null) return base;
+  const under = tokenRgb(tokens, 'surface');
+  return base.map((c, i) => alpha * c + (1 - alpha) * under[i]) as Rgb;
 }
 
 // Every --c-* token must appear here. A new colour fails until it is classified.
@@ -55,6 +107,7 @@ export const TOKEN_CLASS: Record<string, TokenKind> = {
   'c-dew': 'line',
   'c-freeze': 'line',
   'c-rain-bar': 'line',
+  'c-range-precip': 'line',
   'c-accum': 'line',
   'c-prob': 'line',
   'c-snow': 'fill',
@@ -92,18 +145,24 @@ const DEFAULT_BACKDROPS = ['surface', 'c-night'];
 const BANDS = ['c-band-inner', 'c-band-outer'];
 // The daily view's high and low bands. Its lines are drawn over both, so both count as backdrops for them.
 const DAILY_BANDS = ['c-band-tmax', 'c-band-tmin'];
+// A backdrop name is a token, or a layer whose opacity is composited (see backdropRgb).
 export const BACKDROPS: Record<string, string[]> = {
   'c-humidity': [...DEFAULT_BACKDROPS, 'c-cloud'],
   'c-pressure': [...DEFAULT_BACKDROPS, 'c-cloud'],
   // median and daily lines drawn over the ensemble and precipitation bands
-  'c-median': [...DEFAULT_BACKDROPS, ...BANDS, ...DAILY_BANDS],
-  'c-prior': [...DEFAULT_BACKDROPS, ...BANDS],
-  'c-current': [...DEFAULT_BACKDROPS, ...BANDS],
+  // (cumulative rain lines are also drawn over the winter shade, composited at its opacity)
+  'c-median': [...DEFAULT_BACKDROPS, ...BANDS, ...DAILY_BANDS, 'c-winter'],
+  'c-prior': [...DEFAULT_BACKDROPS, ...BANDS, 'c-winter'],
+  'c-current': [...DEFAULT_BACKDROPS, ...BANDS, 'c-winter'],
   'c-rain-bar': [...DEFAULT_BACKDROPS, ...BANDS],
+  // the rain range outline is drawn over the precipitation bands
+  'c-range-precip': [...DEFAULT_BACKDROPS, ...BANDS],
   'c-prob': [...DEFAULT_BACKDROPS, ...BANDS],
   'c-accum': [...DEFAULT_BACKDROPS, 'c-band-outer'],
   'c-tmax': [...DEFAULT_BACKDROPS, ...BANDS, ...DAILY_BANDS],
-  'c-tmin': [...DEFAULT_BACKDROPS, ...BANDS, ...DAILY_BANDS]
+  'c-tmin': [...DEFAULT_BACKDROPS, ...BANDS, ...DAILY_BANDS],
+  // the hatch lines sit on the snow fill, not on the panel
+  'c-snow-outline': [...DEFAULT_BACKDROPS, 'c-snow']
 };
 export const backdropsFor = (token: string) => BACKDROPS[token] ?? DEFAULT_BACKDROPS;
 
@@ -129,7 +188,9 @@ export const TEXT_PAIRS: [string, string][] = [
   ['muted', 'c-night'],
   ['muted', 'day-cell'],
   ['header-text', 'header'],
-  ['header-link', 'header']
+  ['header-link', 'header'],
+  // .now-label is text in the Now colour
+  ['c-now', 'surface']
 ];
 
 /** UI pairs (borders, focus rings, indicators): 3:1 (WCAG 1.4.11). */
@@ -190,15 +251,15 @@ export function hasChartRule(css: string, cls: string): boolean {
 }
 
 describe('chart token classes', () => {
-  const cTokens = [...TOKENS.keys()].filter((n) => n.startsWith('c-'));
+  const cTokens = [...new Set([...TOKENS.keys(), ...DARK_TOKENS.keys(), ...DARK_OS_TOKENS.keys()])].filter((n) => n.startsWith('c-'));
 
-  it('every --c-* token in :root is classified', () => {
+  it('every --c-* token in any token block is classified', () => {
     const unclassified = cTokens.filter((n) => !(n in TOKEN_CLASS));
     expect(unclassified, 'add these to TOKEN_CLASS in contrast.test.ts').toEqual([]);
   });
 
-  it('every TOKEN_CLASS entry names a token that exists in :root', () => {
-    const missing = Object.keys(TOKEN_CLASS).filter((n) => !TOKENS.has(n));
+  it('every TOKEN_CLASS entry names a token that exists in every theme', () => {
+    const missing = Object.keys(TOKEN_CLASS).filter((n) => !Object.values(THEMES).every((t) => t.has(n)));
     expect(missing).toEqual([]);
   });
 
@@ -214,36 +275,57 @@ describe('chart token classes', () => {
   });
 });
 
+describe('dark themes mirror the light tokens', () => {
+  /** The colour tokens (hex values) of a block, sorted. Font and radius tokens are not colours. */
+  const colours = (t: Map<string, string>) =>
+    [...t].filter(([, v]) => v.startsWith('#')).map(([k]) => k).sort();
+  /** Name and value pairs, sorted, so two blocks compare exactly. */
+  const pairs = (t: Map<string, string>) => [...t].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+  it('the explicit dark block defines the same colour tokens as light', () => {
+    expect(colours(DARK_TOKENS)).toEqual(colours(TOKENS));
+  });
+
+  it('the OS-driven dark block defines the same colour tokens as light', () => {
+    expect(colours(DARK_OS_TOKENS)).toEqual(colours(TOKENS));
+  });
+
+  it('the two dark blocks have the same values (they are written out twice, so they must not drift)', () => {
+    expect(pairs(DARK_OS_TOKENS)).toEqual(pairs(DARK_TOKENS));
+  });
+});
+
 /** The names used as var(--x) in app.css outside the :root block and comments. */
 export function referencedTokens(css: string): Set<string> {
   const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/:root\s*\{[^}]*\}/, '');
   return new Set([...stripped.matchAll(/var\(--([a-z0-9-]+)\)/g)].map((m) => m[1]));
 }
 
-describe('chart line tokens reach 3:1 on each backdrop', () => {
+describe.each(Object.entries(THEMES))('%s: chart line tokens reach 3:1 on each backdrop', (_theme, tokens) => {
   const lines = Object.entries(TOKEN_CLASS)
     .filter(([, kind]) => kind === 'line')
     .map(([name]) => name);
 
   it.each(lines)('%s', (token) => {
     const failures: string[] = [];
+    const fg = tokenRgb(tokens, token);
     for (const backdrop of backdropsFor(token)) {
-      const ratio = contrast(token, backdrop);
-      if (ratio < 3) failures.push(`--${backdrop}: ${ratio.toFixed(2)}`);
+      const r = ratio(fg, backdropRgb(backdrop, tokens));
+      if (r < 3) failures.push(`--${backdrop}: ${r.toFixed(2)}`);
     }
-    expect(failures, `--${token} (${TOKENS.get(token)}) fails 3:1`).toEqual([]);
+    expect(failures, `--${token} (${tokens.get(token)}) fails 3:1`).toEqual([]);
   });
 });
 
-describe('text and UI pairs', () => {
+describe.each(Object.entries(THEMES))('%s: text and UI pairs', (_theme, tokens) => {
   it.each(TEXT_PAIRS)('text --%s on --%s is at least 4.5:1', (fg, bg) => {
-    const ratio = contrast(fg, bg);
-    expect(ratio, `--${fg} on --${bg}`).toBeGreaterThanOrEqual(4.5);
+    const r = ratio(tokenRgb(tokens, fg), backdropRgb(bg, tokens));
+    expect(r, `--${fg} on --${bg}`).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each(UI_PAIRS)('UI --%s on --%s is at least 3:1', (fg, bg) => {
-    const ratio = contrast(fg, bg);
-    expect(ratio, `--${fg} on --${bg}`).toBeGreaterThanOrEqual(3);
+    const r = ratio(tokenRgb(tokens, fg), backdropRgb(bg, tokens));
+    expect(r, `--${fg} on --${bg}`).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -299,5 +381,48 @@ describe('contrast helper', () => {
 
   it('rejects a token with an alpha channel', () => {
     expect(() => contrast('x', 'y', new Map([['x', '#00000080'], ['y', '#ffffff']]))).toThrow(/opaque/);
+  });
+});
+
+describe('token block parsing', () => {
+  const css = [
+    '/* :root { --fake: #000000; } */',
+    ':root { --a: #111111; --font-x: serif; }',
+    ":root[data-theme='dark'] { --a: #222222; }",
+    '@media (prefers-color-scheme: dark) {',
+    "  :root:not([data-theme=\"light\"]) { --a: #333333; }",
+    '}'
+  ].join('\n');
+
+  it('reads each token block by its exact selector, quotes normalised, comments ignored', () => {
+    expect(tokensOf(css, ':root').get('a')).toBe('#111111');
+    expect(tokensOf(css, ":root[data-theme='dark']").get('a')).toBe('#222222');
+    expect(tokensOf(css, ":root:not([data-theme='light'])").get('a')).toBe('#333333');
+    expect(tokensOf(css, ':root').has('fake')).toBe(false);
+  });
+
+  it('a missing block is an error, not an empty theme', () => {
+    expect(() => tokensOf(css, ':root.missing')).toThrow(/no ":root.missing" rule/);
+  });
+
+  it('the real app.css has light, explicit dark and OS dark blocks', () => {
+    expect(THEMES.light.get('bg')).toBeDefined();
+    expect(THEMES.dark.get('bg')).toBeDefined();
+    expect(THEMES.darkByOs.get('bg')).toBeDefined();
+  });
+});
+
+describe('composited layers', () => {
+  it('reads the opacity of the winter shade and the cloud area from app.css', () => {
+    expect(layerOpacity(CSS, 'winter')).toBe(0.7);
+    expect(layerOpacity(CSS, 'area-cloud')).toBe(0.85);
+    expect(layerOpacity(CSS, 'night')).toBeNull();
+  });
+
+  it('a layer with opacity is seen as the token composited over the surface, an opaque token as itself', () => {
+    const tokens = new Map([['surface', '#ffffff'], ['c-winter', '#000000'], ['c-night', '#000000']]);
+    const css = '.chart-svg .winter { fill: var(--c-winter); opacity: 0.5; }\n.chart-svg .night { fill: var(--c-night); }';
+    expect(backdropRgb('c-winter', tokens, css)).toEqual([127.5, 127.5, 127.5]);
+    expect(backdropRgb('c-night', tokens, css)).toEqual([0, 0, 0]);
   });
 });

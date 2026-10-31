@@ -217,13 +217,14 @@ test('mocked: hover and arrow keys read the values at an hour across the stack; 
   await page.keyboard.press('ArrowRight');
   await expect(slider).toHaveAttribute('aria-valuenow', '1');
   await expect(stack.locator('line.crosshair')).toHaveCount(1);
-  // the second step is hour 1: 60 + 15 sin(1 / 3.8) = 63.9, shown rounded
-  await expect(stack.locator('.stack-readout')).toContainText('temperature 64 F, feels like');
+  // the second step is hour 1: 60 + 15 sin(1 / 3.8) = 63.9, shown rounded; the slider's value text names it
+  await expect(slider).toHaveAttribute('aria-valuetext', /Forecast 64 F/);
   // every panel's values for the hovered hour
-  await expect(stack.getByTestId('stack-readout')).toContainText('Precipitation: precipitation 0.00 in, chance 20%');
-  await expect(stack.getByTestId('stack-readout')).toContainText('Sky: cloud');
-  await expect(stack.getByTestId('stack-readout')).toContainText('inHg.');
-  await expect(stack.getByTestId('stack-readout')).toContainText('Wind:');
+  await expect(slider).toHaveAttribute('aria-valuetext', /Hourly rain 0\.00 in, .*Chance of precipitation 20%/);
+  await expect(slider).toHaveAttribute('aria-valuetext', /Cloud cover [^,]+, Humidity [^,]+, Pressure [\d.]+ inHg/);
+  await expect(slider).toHaveAttribute('aria-valuetext', /Wind speed [^,]+, Gusts [^,]+, Wind from [NESW]{1,3}/);
+  // no visible text: the readout lines are gone, and so is the pointer hint
+  await expect(page.locator('.stack-readout, [data-testid="stack-readout"]')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(stack.locator('line.crosshair')).toHaveCount(0);
 
@@ -251,7 +252,7 @@ test('mocked: each stack panel has its own tooltip for the hovered hour; arrows 
   const tipY = async (name: string) => Number(/translate\([-\d.]+ ([-\d.]+)\)/.exec((await tip(name).getAttribute('transform')) ?? '')?.[1]);
   await expect(stack.locator('[data-testid^="tip-"]')).toHaveCount(0);
 
-  // keyboard: two steps (hour 1, as in the readout test above)
+  // keyboard: two steps (hour 1, as in the value text test above)
   await slider.focus();
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
@@ -266,16 +267,16 @@ test('mocked: each stack panel has its own tooltip for the hovered hour; arrows 
   await expect(tip('sky')).toContainText('inHg');
   await expect(tip('wind')).toContainText('Wind speed');
   expect(await tip('wind').textContent()).toMatch(/Wind from[NESW]{1,3}/);
-  // the readout names the same hour and the same values
-  await expect(stack.getByTestId('stack-readout')).toContainText('chance 20%');
+  // the slider's value text names the same hour and the same values
+  await expect(slider).toHaveAttribute('aria-valuetext', /Chance of precipitation 20%/);
 
-  // arrow keys move every box with the crosshair: the temperature box follows the readout at the new hour
-  const readoutTemp = async () => /temperature (-?\d+) F/.exec((await stack.getByTestId('stack-readout').textContent()) ?? '')?.[1];
+  // arrow keys move every box with the crosshair: the temperature box follows the value text at the new hour
+  const valueTemp = async () => /Forecast (-?\d+) F/.exec((await slider.getAttribute('aria-valuetext')) ?? '')?.[1];
   const before = await tip('temperature').textContent();
   await page.keyboard.press('ArrowRight');
   await expect(slider).toHaveAttribute('aria-valuenow', '2');
   expect(await tip('temperature').textContent()).not.toBe(before);
-  await expect(tip('temperature')).toContainText(`${await readoutTemp()} F`);
+  await expect(tip('temperature')).toContainText(`${await valueTemp()} F`);
 
   // a pointer in the middle of the plot puts every box to the right of the crosshair
   const crossX = async () => Number(await stack.locator('line.crosshair').getAttribute('x1'));
@@ -315,31 +316,32 @@ test('mocked: each stack panel has its own tooltip for the hovered hour; arrows 
   await page.keyboard.press('Escape');
   await expect(stack.locator('[data-testid^="tip-"]')).toHaveCount(0);
 
-  // after paging to the next day, the hovered hour's tooltip values match the readout
+  // after paging to the next day, the hovered hour's tooltip values match the slider's value text
   await page.getByRole('button', { name: 'Later day' }).click();
   await slider.focus();
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
   await expect(slider).toHaveAttribute('aria-valuenow', '1');
-  await expect(tip('temperature')).toContainText(`${await readoutTemp()} F`);
-  const chance = /chance (\d+)%/.exec((await stack.getByTestId('stack-readout').textContent()) ?? '')?.[1];
+  await expect(tip('temperature')).toContainText(`${await valueTemp()} F`);
+  const chance = /Chance of precipitation (\d+)%/.exec((await slider.getAttribute('aria-valuetext')) ?? '')?.[1];
   await expect(tip('precipitation')).toContainText(`${chance}%`);
 });
 
-test('mocked: daily view: a slider with a readout, one tooltip per day (its high, low and ranges on Temperature; its rain on Precipitation), a date title, a right-edge flip, arrows and Escape', async ({ page }) => {
+test('mocked: daily view: a slider with value text, one tooltip per day (its high, low and ranges on Temperature; its rain on Precipitation), a date title, a right-edge flip, arrows and Escape', async ({ page }) => {
   await setup(page);
   await page.goto(`/stations/${ID}`);
   await page.getByRole('button', { name: 'Daily (15 days)' }).click();
   const chart = page.getByTestId('forecast-chart');
   const tip = page.getByTestId('tip-daily');
-  const readout = page.getByTestId('daily-readout');
   // SVG text has no innerText, so read the text content
   const labels = () => tip.locator('text.tip-label').allTextContents();
   const values = () => tip.locator('text.tip-value').allTextContents();
   const tipX = async () => Number(/translate\(([-\d.]+) /.exec((await tip.getAttribute('transform')) ?? '')?.[1]);
   await expect(page.getByRole('slider', { name: 'Daily forecast chart' })).toBeVisible();
   await expect(tip).toHaveCount(0);
-  await expect(readout).toContainText('Move the pointer across the chart');
+  // nothing is hovered: no value text (no pointer hint, no visible readout)
+  await expect(chart).not.toHaveAttribute('aria-valuetext');
+  await expect(page.getByTestId('daily-readout')).toHaveCount(0);
 
   // keyboard: the first arrow starts at the first day (Fri Jul 10: high 80 F, low 50 F, ensemble 74 to 86 and 44 to 55)
   await chart.focus();
@@ -347,7 +349,7 @@ test('mocked: daily view: a slider with a readout, one tooltip per day (its high
   await expect(tip.locator('text.tip-title')).toHaveText('Fri Jul 10');
   expect(await labels()).toEqual(['High', 'High p10-p90', 'Low', 'Low p10-p90', 'Median']);
   expect(await values()).toEqual(['80 F', '74 F to 86 F', '50 F', '44 F to 55 F', 'high 80 F, low 50 F']);
-  await expect(readout).toHaveText('Fri Jul 10: High 80 F, High p10-p90 74 F to 86 F, Low 50 F, Low p10-p90 44 F to 55 F, Median high 80 F, low 50 F.');
+  await expect(chart).toHaveAttribute('aria-valuetext', 'Fri Jul 10: High 80 F, High p10-p90 74 F to 86 F, Low 50 F, Low p10-p90 44 F to 55 F, Median high 80 F, low 50 F.');
   await expect(chart).toHaveAttribute('aria-valuenow', '0');
   // each tooltip swatch is the legend's class for that series
   await expect(tip.locator('line.line-tmax')).toHaveCount(1);
@@ -357,7 +359,7 @@ test('mocked: daily view: a slider with a readout, one tooltip per day (its high
   await page.keyboard.press('ArrowRight');
   await expect(tip.locator('text.tip-title')).toHaveText('Sat Jul 11');
   await expect(tip.locator('text.tip-value').first()).toHaveText('79 F');
-  await expect(readout).toContainText('Sat Jul 11: High 79 F');
+  await expect(chart).toHaveAttribute('aria-valuetext', /^Sat Jul 11: High 79 F/);
 
   // Precipitation: the ensemble range and median, then the chance of rain
   await page.getByRole('button', { name: 'Precipitation' }).click();
@@ -396,7 +398,6 @@ test('mocked: changes chart: a tooltip per target date listing every lead with i
   await page.goto(`/stations/${ID}`);
   const chart = page.getByTestId('changes-chart');
   const tip = page.getByTestId('tip-changes');
-  const readout = page.getByTestId('changes-readout');
   const values = () => tip.locator('text.tip-value').allTextContents();
   await expect(tip).toHaveCount(0);
 
@@ -417,7 +418,7 @@ test('mocked: changes chart: a tooltip per target date listing every lead with i
   expect(await values()).toEqual(['0.00 in', '0.05 in', '0.10 in', '0.15 in', '0.00 in', '0.05 in', '0.10 in', '0.15 in']);
   await expect(tip.locator('line.line-lead-0')).toHaveCount(1);
   await expect(tip.locator('line.line-lead-7')).toHaveCount(1);
-  await expect(readout).toContainText('Fri Jul 10: latest 0.00 in');
+  await expect(chart).toHaveAttribute('aria-valuetext', /^Fri Jul 10: latest 0\.00 in/);
 
   // the next date, on the High metric: each lead shows that metric's value for that date
   await page.keyboard.press('ArrowRight');
@@ -425,7 +426,7 @@ test('mocked: changes chart: a tooltip per target date listing every lead with i
   await page.locator('#changes').getByRole('button', { name: 'High', exact: true }).click();
   await chart.focus();
   expect(await values()).toEqual(['79 F', '80 F', '81 F', '79 F', '80 F', '81 F', '79 F', '80 F']);
-  await expect(readout).toContainText('Sat Jul 11: latest 79 F');
+  await expect(chart).toHaveAttribute('aria-valuetext', /^Sat Jul 11: latest 79 F/);
 
   // a pointer at the right edge snaps to the last date, whose box would pass the plot's right edge: it flips left
   const width = Number(await chart.getAttribute('width'));
@@ -440,7 +441,7 @@ test('mocked: changes chart: a tooltip per target date listing every lead with i
   await chart.focus();
   await page.keyboard.press('Escape');
   await expect(tip).toHaveCount(0);
-  await expect(readout).toContainText('Move the pointer across the chart');
+  await expect(chart).not.toHaveAttribute('aria-valuetext');
 });
 
 test('mocked: ensemble null hides ribbons; stale shows the saved-at line', async ({ page }) => {

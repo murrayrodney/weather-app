@@ -3,6 +3,9 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [sveltekit()],
+  // Never inline assets as data: URIs. Vite's default 4 KiB limit inlined a woff2 font into app.css, and
+  // font-src 'self' (security-headers.json) blocks data: fonts. Every font must be a file under /_app/immutable.
+  build: { assetsInlineLimit: 0 },
   server: {
     proxy: {
       '/api': { target: 'http://localhost:8000', changeOrigin: false },

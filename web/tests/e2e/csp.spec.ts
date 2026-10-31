@@ -40,7 +40,7 @@ test('no CSP violations on signed-out and signed-in pages, including client navi
   const svg = page.locator('svg.chart-svg:not(.legend-row)').first();
   await svg.hover({ position: { x: 200, y: 100 } });
   await svg.press('ArrowRight');
-  await expect(page.getByTestId('readout').first()).not.toHaveText('');
+  await expect(svg).toHaveAttribute('aria-valuetext', /./);
   await w.expectClean('toggles and cursor');
 
   // client-side navigation creates the route announcer (inline style attribute)

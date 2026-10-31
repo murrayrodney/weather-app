@@ -8,7 +8,7 @@
   import ChartLegend from './ChartLegend.svelte';
   import ChartTooltip from './ChartTooltip.svelte';
   import { type Glyph, type Layer, type StackLayout, WIND_ARROW } from './stackLayout';
-  import type { TipBox } from './tooltip';
+  import { tipBody, tipText, type TipBox } from './tooltip';
 
   // Draws stacked panels on one time axis. Geometry comes from layoutStack; the caller builds each panel's paths.
   // Shading, grid, now line and crosshair are drawn in every panel so the stack reads as one chart. Each panel's
@@ -38,7 +38,6 @@
     hoverPx: number | null;
     index: number | null; // the hourly step under the crosshair (keyboard position)
     count: number;
-    valuetext: string;
     label: string;
     tips?: TipBox[]; // one tooltip per panel, index-aligned with layout.panels; empty means no tooltips
     onhover: (px: number | null) => void;
@@ -47,6 +46,10 @@
 
   instances += 1;
   const hatchId = `snow-hatch-${instances}`;
+
+  // The screen-reader value: the first panel's tooltip sentence (with the hour), then the other panels' rows without
+  // the repeated hour. Undefined when nothing is hovered, so the attribute is left off.
+  const valuetext = $derived(tips.length ? tips.map((t, i) => (i === 0 ? tipText(t) : tipBody(t))).join(' ') : undefined);
 
   const first = $derived(layout.panels[0]);
   const last = $derived(layout.panels[layout.panels.length - 1]);
@@ -67,6 +70,7 @@
   aria-valuemin={0}
   aria-valuemax={Math.max(count - 1, 0)}
   aria-valuenow={index ?? undefined}
+  aria-valuetext={valuetext}
   data-testid="panel-stack"
   onpointermove={(e) => onhover(pointerPx(e))}
   onpointerleave={() => onhover(null)}

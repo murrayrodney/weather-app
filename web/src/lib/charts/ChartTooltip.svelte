@@ -3,7 +3,7 @@
 
   // One panel's tooltip, drawn inside the stack's SVG as one of its last children (proposal 08 sections 2.1 and 6.2).
   // It sits at the crosshair x and is centred vertically in its panel, clamped inside it. Classes and attributes only
-  // (no style), and aria-hidden: the stack's readout line is the accessible channel.
+  // (no style), and aria-hidden: the chart's slider aria-valuetext is the accessible channel.
   let {
     box,
     anchorX,

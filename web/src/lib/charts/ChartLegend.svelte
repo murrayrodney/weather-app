@@ -4,7 +4,7 @@
 
   // Legend drawn inside a chart's SVG (proposal 08 section 1.1). Each swatch carries the series' own CSS class, so a
   // dash or colour change in app.css changes the mark and its legend together. aria-hidden: screen readers get the
-  // chart's own label and readout. Callers pass only the items they draw.
+  // chart's own label and its slider value text. Callers pass only the items they draw.
   let {
     items,
     x,

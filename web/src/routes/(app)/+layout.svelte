@@ -3,6 +3,7 @@
   import { page } from '$app/state';
   import type { Snippet } from 'svelte';
   import { signOut } from '$lib/auth/session.svelte';
+  import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 
   let { children }: { children: Snippet } = $props();
 
@@ -36,6 +37,7 @@
     <a href={link.href} aria-current={isCurrent(link.href, page.url.pathname) ? 'page' : undefined}>{link.label}</a>
   {/each}
   <span class="spacer"></span>
+  <ThemeToggle />
   <button type="button" class="secondary" onclick={out}>Sign out</button>
 </nav>
 

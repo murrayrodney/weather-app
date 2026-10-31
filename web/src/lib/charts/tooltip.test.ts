@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fmtRange, fmtValue, placeTooltip, TIP_GAP, tipDate, tipHeight, tipHour, tipText, tipWidth, type TipBox } from './tooltip';
+import { fmtRange, fmtValue, placeTooltip, TIP_GAP, tipBody, tipDate, tipHeight, tipHour, tipText, tipWidth, type TipBox } from './tooltip';
 
 const base = { w: 200, h: 60, plotW: 800, left: 0, top: 0, bottom: 300 };
 
@@ -63,7 +63,7 @@ describe('row formatting', () => {
     expect(fmtValue(undefined, 2, ' inHg')).toBe('no value');
   });
 
-  it('prints a range as "low to high", the readout wording', () => {
+  it('prints a range as "low to high", the tooltip wording', () => {
     expect(fmtRange(58.4, 70.2, 0, ' F')).toBe('58 F to 70 F');
     expect(fmtRange(null, 0.5, 2, ' in')).toBe('no value to 0.50 in');
   });
@@ -90,5 +90,19 @@ describe('tipDate and tipText', () => {
 
   it('says there are no values when a box has no rows', () => {
     expect(tipText({ title: 'Fri Jul 10', rows: [] })).toBe('Fri Jul 10: no values.');
+  });
+});
+
+describe('tipBody', () => {
+  it('reads the rows as one sentence without the title', () => {
+    expect(tipBody({ title: 'Tue Oct 27, 3 PM', rows: [{ label: 'Hourly rain', value: '0.00 in' }, { label: 'Chance of precipitation', value: '20%' }] })).toBe(
+      'Hourly rain 0.00 in, Chance of precipitation 20%.'
+    );
+  });
+
+  it('says there are no values when a box has no rows, and tipText joins it after the title', () => {
+    expect(tipBody({ title: 'Tue Oct 27, 3 PM', rows: [] })).toBe('no values.');
+    const box = { title: 'Tue Oct 27, 3 PM', rows: [{ label: 'Gusts', value: '9 mph' }] };
+    expect(tipText(box)).toBe(`Tue Oct 27, 3 PM: ${tipBody(box)}`);
   });
 });
