@@ -2,7 +2,6 @@
   import type { Forecast } from '$lib/api/types';
   import ForecastNotes from '$lib/components/ForecastNotes.svelte';
   import { FORECAST_HOURLY_DAYS, FORECAST_MAX_DAYS } from '$lib/config';
-  import { formatInZone } from '$lib/transforms/dates';
   import {
     arrowIndexes,
     arrowRotation,
@@ -276,31 +275,6 @@
     xh.clear();
   }
 
-  const readoutLines = $derived.by((): string[] => {
-    if (hover === null) return [];
-    const i = hover;
-    const t = det?.temperature_f[i];
-    const parts = [
-      `temperature ${val(t, 0, ' F')}`,
-      `feels like ${val(det?.apparent_temp_f[i], 0, ' F')}`,
-      `dew point ${val(det?.dew_point_f[i], 0, ' F')}`
-    ];
-    const e = ens?.temperature_f;
-    if (e) parts.push(`ensemble ${val(e.p10[i], 0, ' F')} to ${val(e.p90[i], 0, ' F')} (median ${val(e.p50[i], 0, ' F')})`);
-    const lines = [`${formatInZone(hw.time[i], tz)}: ${parts.join(', ')}.`];
-    if (compact || !det) return lines;
-    const pr = [`precipitation ${val(det.precip_in[i], 2, ' in')}`, `chance ${val(det.prob_precip[i], 0, '%')}`];
-    if (ens) pr.push(`ensemble ${val(ens.precip_in.p10[i], 2, ' in')} to ${val(ens.precip_in.p90[i], 2, ' in')}`);
-    pr.push(`accumulated since now ${val(det.precip_accum_in[i], 2, ' in')}`);
-    if (ens) pr.push(`ensemble ${val(ens.precip_accum_in.p10[i], 2, ' in')} to ${val(ens.precip_accum_in.p90[i], 2, ' in')}`);
-    if (snowMax > 0) pr.push(`snow ${val(det.snow_in[i], 2, ' in')}`);
-    lines.push(`Precipitation: ${pr.join(', ')}.`);
-    lines.push(`Sky: cloud ${val(det.cloud_pct[i], 0, '%')}, humidity ${val(det.humidity_pct[i], 0, '%')}, pressure ${val(det.pressure_inhg[i], 2, ' inHg')}.`);
-    const dir = det.wind_dir_deg[i];
-    const from = typeof dir === 'number' ? ` from ${windCompass(dir)}` : '';
-    lines.push(`Wind: ${val(det.wind_mph[i], 0, ' mph')}${from}, gusts ${val(det.gust_mph[i], 0, ' mph')}.`);
-    return lines;
-  });
 
   // One tooltip per panel (proposal 08 decision 2): each box lists its own panel's rows at the hovered hour, with the same
   // numbers as the readout. The compact dashboard row has only the temperature panel, so it gets only the temperature box.
@@ -384,7 +358,6 @@
       {hoverPx}
       index={hover}
       count={hw.time.length}
-      valuetext={readoutLines.join(' ')}
       label={compact
         ? 'Hourly temperature, feels like, dew point and ensemble range for 7 days'
         : 'Hourly temperature, precipitation, cloud, humidity, pressure and wind for 7 days'}
@@ -392,12 +365,5 @@
       onhover={xh.onhover}
       onkey={xh.onkey}
     />
-    <div class="stack-readout" data-testid="stack-readout">
-      {#if readoutLines.length}
-        {#each readoutLines as line, k (k)}<p>{line}</p>{/each}
-      {:else}
-        <p>Move the pointer across the chart, or focus it and use the left and right arrow keys, to read the values at each hour.</p>
-      {/if}
-    </div>
   </ChartFrame>
 </div>

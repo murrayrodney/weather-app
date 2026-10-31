@@ -24,7 +24,6 @@
     hoverPx,
     index,
     count,
-    valuetext,
     label,
     tips = [],
     onhover,
@@ -68,7 +67,6 @@
   aria-valuemin={0}
   aria-valuemax={Math.max(count - 1, 0)}
   aria-valuenow={index ?? undefined}
-  aria-valuetext={valuetext}
   data-testid="panel-stack"
   onpointermove={(e) => onhover(pointerPx(e))}
   onpointerleave={() => onhover(null)}
