@@ -1,5 +1,5 @@
 # Build context: the repo root (06 section 9.2). The root .dockerignore lets through only the files copied below.
-FROM postgres:17-alpine
+FROM postgres:18-alpine
 # pg_dump major must be >= server major; bump with Supabase's Postgres version (dependabot docker ecosystem)
 RUN apk add --no-cache bash age aws-cli curl ca-certificates \
  && adduser -D -u 10001 backup
