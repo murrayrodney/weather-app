@@ -1,0 +1,97 @@
+name: backend
+on:
+  workflow_call:          # called by ci.yml (pull requests, path-decided there) and deploy.yml (main)
+permissions:
+  contents: read
+jobs:
+  rust-lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false }
+      # The repo pins Rust 1.95 (backend/Dockerfile RUST_VERSION, docker-compose.test.yml); the guide said "stable".
+      - run: rustup toolchain install 1.95 --profile minimal -c rustfmt,clippy && rustup default 1.95
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with: { workspaces: backend }
+      - run: cargo fmt --manifest-path backend/Cargo.toml --all -- --check
+      - run: cargo clippy --manifest-path backend/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - name: feature isolation (S5; the canonical check from conventions, resolver 2/3)
+        working-directory: backend
+        run: |
+          if [ -d crates/api ]; then
+            if cargo tree -p api -e normal,build,features | grep -Eq 'decrypt|test-support|testdb'; then echo "api enables a test or decrypt feature"; exit 1; fi
+          fi
+          if [ -d crates/poller ]; then
+            if cargo tree -p poller -e normal,build,features | grep -Eq 'test-support|testdb'; then echo "poller enables a test feature"; exit 1; fi
+          fi
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false }
+      - name: cache the cargo registry, target and tools used by the Compose test project (05 binds them when these variables are set)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .ci-cache
+          key: cargo-compose-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: cargo-compose-
+      - run: mkdir -p .ci-cache/registry .ci-cache/target
+      - run: make init
+      - name: backend tests (the web tests live in web.yml and run only when web/ changes)
+        env:
+          CARGO_REGISTRY_SRC: ./.ci-cache/registry
+          CARGO_TARGET_SRC: ./.ci-cache/target
+        run: make check-local-only test-db test-backend
+      - name: production files contain no demo values
+        run: |
+          files="ops/fly/poller.toml ops/backup/fly.toml"
+          for f in ops/fly/api.toml web/netlify.toml; do [ -f "$f" ] && files="$files $f"; done
+          # shellcheck disable=SC2086  # intentional word splitting: one argument per file
+          ops/ci/check-demo-values.sh $files
+  supply-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false }
+      # advisories use the RustSec DB (same data as cargo-audit)
+      - uses: EmbarkStudios/cargo-deny-action@34899fc7ba81ca6268d5947a7a16b4649013fea1 # v2.0.11
+        with: { manifest-path: backend/Cargo.toml, command: check advisories bans licenses sources }
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false }
+      - run: docker build -t famweather-backend:ci backend
+      - name: "image sanity (distroless: no shell)"
+        run: |
+          # 02's contract: started with an empty environment, a binary exits non-zero (and prints no values)
+          for b in api poller admin; do
+            [ -d "backend/crates/$b" ] || { echo "skip $b (crate not present yet)"; continue; }
+            if docker run --rm famweather-backend:ci /usr/local/bin/$b >/dev/null 2>&1; then echo "$b started with an empty environment"; exit 1; fi
+          done
+          docker create --name chk famweather-backend:ci /usr/local/bin/api   # the image has no ENTRYPOINT/CMD; create needs a command
+          if docker export chk | tar -t | grep -Eqi '(^|/)\.env($|\.)|supabase_service|private[_-]?key'; then
+            echo "secret-like file found in the image"; exit 1
+          fi
+          docker cp chk:/etc/ssl/app-certs/. "$RUNNER_TEMP/certs-in-image"
+          if [ -f backend/certs/supabase-ca.crt ]; then
+            cmp backend/certs/supabase-ca.crt "$RUNNER_TEMP/certs-in-image/supabase-ca.crt"
+          else
+            echo "::warning::backend/certs/supabase-ca.crt not committed yet (runbook step 1b); CA content check skipped"
+          fi
+          docker rm chk
+          docker image inspect famweather-backend:ci --format '{{.Config.User}}' | grep -Eq 'nonroot|65532'
+      - name: backup image builds (backend/certs/.keep keeps this working before the CA exists)
+        run: docker build -f ops/backup/Dockerfile -t famweather-backup:ci .
+      - name: shellcheck and actionlint
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck ops/backup/backup.sh ops/backup/test.sh ops/fly/run-oneoff.sh ops/ci/*.sh
+          # the download script is pinned to the v1.7.7 commit and installs that same version
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/03d0035246f3e81f36aed592ffb4bebf33a03106/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint
+      - run: ops/backup/test.sh

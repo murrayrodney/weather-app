@@ -1,0 +1,7 @@
+version: 2
+updates:
+  - { package-ecosystem: cargo, directory: /backend, schedule: { interval: monthly }, groups: { rust: { patterns: ["*"] } } }
+  - { package-ecosystem: npm, directory: /web, schedule: { interval: monthly }, groups: { npm: { patterns: ["*"] } } }
+  - { package-ecosystem: github-actions, directory: /, schedule: { interval: monthly }, groups: { actions: { patterns: ["*"] } } }
+  - { package-ecosystem: docker, directory: /backend, schedule: { interval: monthly } }
+  - { package-ecosystem: docker, directory: /ops/backup, schedule: { interval: monthly } }

@@ -1,0 +1,171 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+    paths:                           # docs-only pushes deploy nothing and cost no minutes
+      - 'backend/**'
+      - 'ops/**'
+      - 'web/**'
+      - 'Makefile'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - '.github/**'
+permissions:
+  contents: read
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+jobs:
+  changes:                          # which parts of the repo this push touched (workflow_call ignores path filters)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.f.outputs.backend }}
+      web: ${{ steps.f.outputs.web }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - id: f
+        env: { BEFORE: "${{ github.event.before }}" }
+        run: |
+          # a new branch or an unknown base counts as "everything changed"
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"; echo "web=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed="$(git diff --name-only "$BEFORE" "$GITHUB_SHA")"
+          hit() { printf '%s\n' "$changed" | grep -Eq "$1" && echo true || echo false; }
+          echo "backend=$(hit '^(backend/|ops/|Makefile$|docker-compose|\.env\.example$|\.github/)')" >> "$GITHUB_OUTPUT"
+          echo "web=$(hit '^(web/|ops/caddy/|\.github/)')" >> "$GITHUB_OUTPUT"
+  backend:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    uses: ./.github/workflows/backend.yml
+  web:
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
+    uses: ./.github/workflows/web.yml
+  build-admin:                      # no `environment:`, so no production secrets exist in this job
+    needs: [changes, backend, web]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.changes.outputs.backend == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      sha256: ${{ steps.sum.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false }
+      # The repo pins Rust 1.95 (backend/Dockerfile RUST_VERSION); the guide said "stable".
+      - run: rustup toolchain install 1.95 --profile minimal && rustup default 1.95
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with: { workspaces: backend }
+      - run: cargo build --release --manifest-path backend/Cargo.toml --locked -p admin
+      - id: sum
+        run: echo "sha256=$(sha256sum backend/target/release/admin | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: admin, path: backend/target/release/admin, retention-days: 1, if-no-files-found: error }
+  deploy:                           # always runs after the parts that ran, so the approval gate also guards web-only pushes
+    needs: [changes, backend, web, build-admin]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false, fetch-depth: 2 }
+      - uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be # 1.5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: ${{ needs.changes.outputs.backend == 'true' }}
+        with: { name: admin, path: admin-bin }
+      - name: verify the admin binary is the one the secret-free job built
+        if: ${{ needs.changes.outputs.backend == 'true' }}
+        env: { ADMIN_SHA256: "${{ needs.build-admin.outputs.sha256 }}" }
+        run: |
+          echo "${ADMIN_SHA256}  admin-bin/admin" | sha256sum -c -
+          chmod +x admin-bin/admin
+      - name: derive app names from the configs
+        run: |
+          {
+            echo "API_APP=$(sed -n 's/^app = "\(.*\)"/\1/p' ops/fly/api.toml)"
+            echo "POLLER_APP=$(sed -n 's/^app = "\(.*\)"/\1/p' ops/fly/poller.toml)"
+            echo "BACKUP_APP=$(sed -n 's/^app = "\(.*\)"/\1/p' ops/backup/fly.toml)"
+          } >> "$GITHUB_ENV"
+      - name: validate fly configs (needs the app tokens; api only once it ships)
+        env:
+          TOKEN_API: ${{ secrets.FLY_API_TOKEN_API }}
+          TOKEN_POLLER: ${{ secrets.FLY_API_TOKEN_POLLER }}
+          TOKEN_BACKUP: ${{ secrets.FLY_API_TOKEN_BACKUP }}
+          DEPLOY_API: ${{ vars.DEPLOY_API }}
+        run: |
+          [ "$DEPLOY_API" != true ] || FLY_API_TOKEN="$TOKEN_API" flyctl config validate --config ops/fly/api.toml --strict
+          FLY_API_TOKEN="$TOKEN_POLLER" flyctl config validate --config ops/fly/poller.toml --strict
+          FLY_API_TOKEN="$TOKEN_BACKUP" flyctl config validate --config ops/backup/fly.toml --strict
+      - name: migrate production (runs the prebuilt admin binary as app_migrator over the session pooler)
+        if: ${{ needs.changes.outputs.backend == 'true' }}
+        env:
+          APP_ENV: production
+          MIGRATOR_DATABASE_URL: ${{ secrets.MIGRATOR_DATABASE_URL }}   # ends with ?sslmode=verify-full
+        run: |
+          test -f backend/certs/supabase-ca.crt || { echo "backend/certs/supabase-ca.crt missing (runbook step 1b)"; exit 1; }
+          DATABASE_URL="${MIGRATOR_DATABASE_URL}&sslrootcert=${GITHUB_WORKSPACE}/backend/certs/supabase-ca.crt" admin-bin/admin migrate
+      - name: deploy poller first (exactly one machine; backend changes only)
+        if: ${{ needs.changes.outputs.backend == 'true' }}
+        env: { FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN_POLLER }}" }
+        run: flyctl deploy backend --config ops/fly/poller.toml --dockerfile backend/Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
+      - name: "deploy api (skipped until repo variable DEPLOY_API=true)"
+        if: ${{ vars.DEPLOY_API == 'true' && needs.changes.outputs.backend == 'true' }}
+        env: { FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN_API }}" }
+        run: flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
+      - name: assert machine counts
+        env:
+          TOKEN_API: ${{ secrets.FLY_API_TOKEN_API }}
+          TOKEN_POLLER: ${{ secrets.FLY_API_TOKEN_POLLER }}
+          DEPLOY_API: ${{ vars.DEPLOY_API }}
+        run: |
+          [ "$(FLY_API_TOKEN="$TOKEN_POLLER" flyctl machines list -a "$POLLER_APP" --json | jq length)" = 1 ]
+          [ "$DEPLOY_API" != true ] || [ "$(FLY_API_TOKEN="$TOKEN_API" flyctl machines list -a "$API_APP" --json | jq length)" = 1 ]
+      - name: update backup image (only when ops/backup, size.sql or certs changed, and only if the machine exists)
+        env: { FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN_BACKUP }}" }
+        run: |
+          if git diff --quiet HEAD~1 HEAD -- ops/backup ops/db/checks/size.sql backend/certs; then echo unchanged; exit 0; fi
+          id=$(flyctl machines list -a "$BACKUP_APP" --json | jq -r '.[0].id // empty')
+          if [ -z "$id" ]; then echo "no backup machine yet (first deploy): skipping"; exit 0; fi
+          flyctl deploy . --config ops/backup/fly.toml --dockerfile ops/backup/Dockerfile --build-only --push --image-label "sha-${GITHUB_SHA::12}"
+          flyctl machine update "$id" --image "registry.fly.io/${BACKUP_APP}:sha-${GITHUB_SHA::12}" -a "$BACKUP_APP" --yes
+      - name: production exposure check (04, S6) as app_ci_check
+        env: { EXPOSURE_DATABASE_URL: "${{ secrets.EXPOSURE_DATABASE_URL }}" }
+        run: ops/db/checks/exposure.sh "${EXPOSURE_DATABASE_URL}&sslrootcert=${GITHUB_WORKSPACE}/backend/certs/supabase-ca.crt"
+      - name: smoke (API and Fly checks; the Netlify checks run in publish-web once the site is published, so SITE_URL is not passed here)
+        env:
+          DEPLOY_API: ${{ vars.DEPLOY_API }}
+        run: |
+          for i in $(seq 1 30); do ops/ci/smoke.sh && exit 0; echo "retry $i"; sleep 20; done; exit 1
+  publish-web:                      # no `environment:` (no production secrets); gated because it needs `deploy`, which waited for approval
+    if: ${{ vars.DEPLOY_WEB == 'true' && needs.changes.outputs.web == 'true' && !cancelled() && needs.deploy.result == 'success' }}   # skipped until 01 ships, and when web/ did not change
+    needs: [changes, deploy]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write               # the only job with write access; used only by the push step
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false, fetch-depth: 0 }     # full history so the fast-forward check against `production` works
+      - name: require SITE_URL (fail fast rather than skipping the wait)
+        env: { SITE_URL: "${{ vars.SITE_URL }}" }
+        run: '[ -n "$SITE_URL" ] || { echo "DEPLOY_WEB is true but repository variable SITE_URL is empty"; exit 1; }'
+      - name: publish web (fast-forwards the `production` branch; Netlify builds and publishes it; proposals/04)
+        env: { PUSH_TOKEN: "${{ github.token }}" }
+        run: git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${GITHUB_SHA}:refs/heads/production"   # no --force: a non-fast-forward is rejected
+      - name: wait for Netlify to publish this commit (/version.txt equals GITHUB_SHA; about 10 minutes at most)
+        env: { SITE_URL: "${{ vars.SITE_URL }}" }
+        run: |
+          for i in $(seq 1 60); do
+            [ "$(curl -fsS "$SITE_URL/version.txt" 2>/dev/null | tr -d '[:space:]')" = "$GITHUB_SHA" ] && exit 0
+            echo "waiting for Netlify ($i)"; sleep 10
+          done
+          echo "Netlify did not publish ${GITHUB_SHA} in time (old site stays live)"; exit 1
+      - name: smoke (Netlify checks)
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+          DEPLOY_API: ${{ vars.DEPLOY_API }}
+        run: |
+          for i in $(seq 1 30); do ops/ci/smoke.sh && exit 0; echo "retry $i"; sleep 20; done; exit 1
