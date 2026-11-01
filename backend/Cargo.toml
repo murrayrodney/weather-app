@@ -20,7 +20,7 @@ publish = false
 # "test-support" / "testdb"; api never gets "decrypt").
 famweather-core = { path = "crates/core" }
 async-trait = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 flate2 = "1"
 futures = "0.3"
@@ -31,9 +31,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 # "migrate" + "macros": sqlx::migrate! (admin migrate, core::testdb) and #[sqlx::test].
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs", "signal"] }
 tokio-util = "0.7"
@@ -49,20 +49,20 @@ chrono-tz = "0.10"
 clap = { version = "4", features = ["derive"] }
 csv = "1"
 # Exact version pinned (conventions: HPKE crate pin + known-answer test). Only the suite we use: X25519 / HKDF-SHA256 / AES-GCM.
-hpke = { version = "=0.14.1", default-features = false, features = ["alloc", "getrandom", "x25519", "aes"] }
+hpke = { version = "=0.15.1", default-features = false, features = ["alloc", "getrandom", "x25519", "aes"] }
 rpassword = "7"
 toml = "1"
 
 # 02 api
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "matched-path", "query", "tokio"] }
-governor = "0.8"
-jsonwebtoken = "9"
+governor = "0.10"
+jsonwebtoken = "11"
 tower = { version = "0.5", default-features = false, features = ["limit", "load-shed", "util"] }
-tower-http = { version = "0.6", default-features = false, features = ["catch-panic", "limit", "propagate-header", "request-id", "sensitive-headers", "set-header", "timeout", "trace"] }
+tower-http = { version = "0.7", default-features = false, features = ["catch-panic", "limit", "propagate-header", "request-id", "sensitive-headers", "set-header", "timeout", "trace"] }
 
 # dev
 assert_cmd = "2"
-hmac = "0.12"
+hmac = "0.13"
 rand_core = { version = "0.10", default-features = false }
 tempfile = "3"
 wiremock = "0.6"
