@@ -70,14 +70,6 @@
   --c-tmin: #2e6fb0;
   --c-current: #da0404;
   --c-prior: #6b7387;
-  --c-lead-0: #1b2030;
-  --c-lead-1: #263a63;
-  --c-lead-2: #2b5190;
-  --c-lead-3: #3b6ab0;
-  --c-lead-4: #4f78ae;
-  --c-lead-5: #5f84ae;
-  --c-lead-6: #6e88aa;
-  --c-lead-7: #7a879b;
   --c-now: #da0404;
   --c-crosshair: #2f354a;
   /* fills */
@@ -169,14 +161,6 @@
   --c-tmin: #8fb3dd;
   --c-current: #ff6a61;
   --c-prior: #8c97ae;
-  --c-lead-0: #f4f6fa;
-  --c-lead-1: #d5e2f5;
-  --c-lead-2: #b4cdee;
-  --c-lead-3: #94b8e6;
-  --c-lead-4: #7ea5da;
-  --c-lead-5: #6a93c9;
-  --c-lead-6: #6a88b0;
-  --c-lead-7: #7d88a0;
   --c-now: #ff6a61;
   --c-crosshair: #e7ebf3;
   --c-band-outer: #243049;
@@ -257,14 +241,6 @@
     --c-tmin: #8fb3dd;
     --c-current: #ff6a61;
     --c-prior: #8c97ae;
-    --c-lead-0: #f4f6fa;
-    --c-lead-1: #d5e2f5;
-    --c-lead-2: #b4cdee;
-    --c-lead-3: #94b8e6;
-    --c-lead-4: #7ea5da;
-    --c-lead-5: #6a93c9;
-    --c-lead-6: #6a88b0;
-    --c-lead-7: #7d88a0;
     --c-now: #ff6a61;
     --c-crosshair: #e7ebf3;
     --c-band-outer: #243049;
@@ -982,58 +958,47 @@ label.field select {
 .chart-svg .marker {
   fill: var(--c-median);
 }
-/* lead lines are opaque: each lead has its own token and width (contrast.test.ts checks each on white and night) */
-.chart-svg .line-lead-0,
-.chart-svg .line-lead-1,
-.chart-svg .line-lead-2,
-.chart-svg .line-lead-3,
-.chart-svg .line-lead-4,
-.chart-svg .line-lead-5,
-.chart-svg .line-lead-6,
-.chart-svg .line-lead-7 {
+/* How the forecast changed (proposal 09): one panel per target day. A tone class sets the metric's token once as
+   --tone, and the panel's marks read it, so a metric's line, bars and latest dot share one colour. Variation is by
+   class: the data line is solid and the latest level is dashed (contrast.test.ts requires the two dashes to differ). */
+.tone-rain {
+  --tone: var(--c-rain-bar);
+}
+.tone-chance {
+  --tone: var(--c-prob);
+}
+.tone-high {
+  --tone: var(--c-tmax);
+}
+.tone-low {
+  --tone: var(--c-tmin);
+}
+.chart-svg .line-facet {
   fill: none;
-}
-/* Each lead has its own width and dash (contrast.test.ts requires distinct dashes within the panel). The colours
-   alone do not separate neighbouring leads, so the legend and tooltip carry the identity too. */
-.chart-svg .line-lead-0 {
-  stroke: var(--c-lead-0);
-  stroke-width: 2.5;
-}
-.chart-svg .line-lead-1 {
-  stroke: var(--c-lead-1);
-  stroke-width: 2;
-  stroke-dasharray: 10 3;
-}
-.chart-svg .line-lead-2 {
-  stroke: var(--c-lead-2);
+  stroke: var(--tone);
   stroke-width: 1.5;
-  stroke-dasharray: 6 3;
 }
-.chart-svg .line-lead-3 {
-  stroke: var(--c-lead-3);
+.chart-svg .bar-latest {
+  stroke: var(--c-forecast);
   stroke-width: 1.5;
-  stroke-dasharray: 2 2;
 }
-.chart-svg .line-lead-4 {
-  stroke: var(--c-lead-4);
-  stroke-width: 1.5;
-  stroke-dasharray: 8 3 1 3;
-}
-.chart-svg .line-lead-5 {
-  stroke: var(--c-lead-5);
-  stroke-width: 1.5;
+.chart-svg .ref-latest {
+  fill: none;
+  stroke: var(--c-crosshair);
+  stroke-width: 1;
   stroke-dasharray: 4 3;
 }
-.chart-svg .line-lead-6 {
-  stroke: var(--c-lead-6);
+.chart-svg .dot-latest {
+  fill: var(--tone);
+  stroke: var(--surface);
   stroke-width: 1.5;
-  stroke-dasharray: 1 3;
-  stroke-linecap: round;
 }
-.chart-svg .line-lead-7 {
-  stroke: var(--c-lead-7);
-  stroke-width: 1.5;
-  stroke-dasharray: 12 3 3 3;
+.chart-svg .facet-unissued {
+  fill: var(--c-night);
+}
+.chart-svg .facet-title {
+  fill: var(--text);
+  font-weight: 600;
 }
 /* chart legends (ChartLegend.svelte): the swatch uses the series' own class; the label is text */
 .chart-svg .legend-label {

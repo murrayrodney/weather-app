@@ -393,55 +393,148 @@ test('mocked: daily view: a slider with value text, one tooltip per day (its hig
   await expect(tip).toHaveCount(0);
 });
 
-test('mocked: changes chart: a tooltip per target date listing every lead with its legend swatch, a date title, the chosen metric, a right-edge flip, arrows and Escape', async ({ page }) => {
+// The changes grid (proposal 09): one panel per target day, titled by day. The fixture is made on 2026-07-12 (its
+// generated_at), so Jul 10 is two days ago, Jul 11 yesterday, Jul 12 today, and Jul 13 to 16 are ahead.
+const DATES = ['2026-07-10', '2026-07-11', '2026-07-12', '2026-07-13', '2026-07-14', '2026-07-15', '2026-07-16'];
+const FACET_TITLES = ['Fri 10', 'Yesterday', 'Today', 'Tomorrow', 'Tue 14', 'Wed 15', 'Thu 16'];
+const facet = (page: Page, date: string) => page.getByTestId(`facet-${date}`);
+
+// The grid's shape from the panels' offsets: columns are the panels in the first row (top edge at y 0), rows are the
+// distinct top edges. At the 1400 px project viewport the seven panels are one row.
+async function gridShape(page: Page): Promise<{ cols: number; rows: number }> {
+  const transforms = await page.locator('[data-testid^="facet-"]').evaluateAll((gs) => gs.map((g) => g.getAttribute('transform') ?? ''));
+  const top = (t: string) => t.slice(t.lastIndexOf(' ') + 1, -1);
+  return { cols: transforms.filter((t) => top(t) === '0').length, rows: new Set(transforms.map(top)).size };
+}
+
+test('mocked: changes grid has one panel per target day, titled by day, with the y labels in its first column only, and not-issued leads blank', async ({ page }) => {
+  await setup(page);
+  await page.goto(`/stations/${ID}`);
+  const chart = page.getByTestId('changes-chart');
+  await expect(chart).toBeVisible();
+  await expect(page.locator('[data-testid^="facet-"]')).toHaveCount(7);
+  for (let i = 0; i < DATES.length; i++) {
+    await expect(facet(page, DATES[i]).locator('text.facet-title')).toHaveText(FACET_TITLES[i]);
+    await expect(facet(page, DATES[i]).locator('text', { hasText: /^7d$/ })).toHaveCount(1);
+    await expect(facet(page, DATES[i]).locator('text', { hasText: /^now$/ })).toHaveCount(1);
+  }
+  // the y labels are drawn only by the first column (the shared scale is labelled once per row)
+  const panels = await page.locator('[data-testid^="facet-"]').evaluateAll((gs) =>
+    gs.map((g) => ({ at: g.getAttribute('transform') ?? '', labels: g.querySelectorAll('text.tick-y').length }))
+  );
+  expect(panels.map((p) => p.labels > 0)).toEqual(panels.map((p) => p.at.startsWith('translate(0 ')));
+  // a day k days ahead has k not-issued leads (1 to k), drawn as one shaded run; past and today have none
+  for (let i = 0; i < DATES.length; i++) {
+    await expect(facet(page, DATES[i]).locator('rect.facet-unissued')).toHaveCount(i > 2 ? 1 : 0);
+  }
+  // the table agrees: Jul 13 (one day ahead) has a dash at 1d, and Jul 16 (four days ahead) has dashes at 4d to 1d
+  const table = page.getByTestId('changes-table');
+  await expect(table.locator('thead th')).toHaveText(['Day', '7d', '6d', '5d', '4d', '3d', '2d', '1d', 'now', 'Range']);
+  const rows = table.locator('tbody tr');
+  await expect(rows).toHaveCount(7);
+  await expect(rows.nth(3).locator('td')).toHaveText(['Jul 13', '0.10', '0.05', '0.00', '0.15', '0.10', '0.05', '–', '0.15', '0.00–0.15']);
+  await expect(rows.nth(6).locator('td')).toHaveText(['Jul 16', '0.05', '0.00', '0.15', '–', '–', '–', '–', '0.10', '0.00–0.15']);
+  // Jul 12's 4d lead is null in the API (no value), so it is a plain dash and not a not-issued dash
+  await expect(rows.nth(2).locator('td').nth(4)).toHaveText('-');
+});
+
+test('mocked: a pointer over a panel shows one tooltip there (its day, the lead and now), a crosshair in every panel, and the same text as the value text', async ({ page }) => {
   await setup(page);
   await page.goto(`/stations/${ID}`);
   const chart = page.getByTestId('changes-chart');
   const tip = page.getByTestId('tip-changes');
-  const values = () => tip.locator('text.tip-value').allTextContents();
   await expect(tip).toHaveCount(0);
 
-  // keyboard: Fri Jul 10 (rain, the default metric): leads 0 to 7 repeat 0.00, 0.05, 0.10 and 0.15 in
+  await chart.scrollIntoViewIfNeeded();
+  const f = (await facet(page, '2026-07-13').boundingBox())!;
+  await page.mouse.move(f.x + f.width * 0.5, f.y + 90);
+  await expect(tip).toHaveCount(1);
+  await expect(tip.locator('text.tip-title')).toHaveText('Tomorrow');
+  // terse rows: the lead as "Nd before", then "now"; no sentences
+  const labels = await tip.locator('text.tip-label').allTextContents();
+  expect(labels).toHaveLength(2);
+  expect(labels[0]).toMatch(/^\d+d before$/);
+  expect(labels[1]).toBe('now');
+  // the tooltip stays inside the hovered panel
+  const tb = (await tip.boundingBox())!;
+  expect(tb.x).toBeGreaterThanOrEqual(f.x - 0.5);
+  expect(tb.x + tb.width).toBeLessThanOrEqual(f.x + f.width + 0.5);
+  // one crosshair tick per panel, at the same lead
+  await expect(chart.locator('line.crosshair')).toHaveCount(7);
+  await expect(chart).toHaveAttribute('aria-valuetext', new RegExp(`^Tomorrow: ${labels[0]} `));
+
+  // leaving the grid hides the tooltip, the crosshairs and the value text
+  await page.mouse.move(0, 0);
+  await expect(tip).toHaveCount(0);
+  await expect(chart.locator('line.crosshair')).toHaveCount(0);
+  await expect(chart).not.toHaveAttribute('aria-valuetext');
+});
+
+test('mocked: arrow keys move the lead, Up and Down move the panel a row, PageUp and PageDown a panel, Escape clears; a not-issued lead shows a dash', async ({ page }) => {
+  await setup(page);
+  await page.goto(`/stations/${ID}`);
+  const chart = page.getByTestId('changes-chart');
+  const tip = page.getByTestId('tip-changes');
   await chart.focus();
+  await expect(chart).toHaveAttribute('aria-valuemin', '0');
+  await expect(chart).toHaveAttribute('aria-valuemax', '7');
+
+  // the first key press starts at the first panel and the oldest lead (7 days before): Fri 10 rain 0.15 in, now 0.00 in
   await page.keyboard.press('ArrowRight');
-  await expect(tip.locator('text.tip-title')).toHaveText('Fri Jul 10');
-  expect(await tip.locator('text.tip-label').allTextContents()).toEqual([
-    'latest',
-    '1 day earlier',
-    '2 days earlier',
-    '3 days earlier',
-    '4 days earlier',
-    '5 days earlier',
-    '6 days earlier',
-    '7 days earlier'
-  ]);
-  expect(await values()).toEqual(['0.00 in', '0.05 in', '0.10 in', '0.15 in', '0.00 in', '0.05 in', '0.10 in', '0.15 in']);
-  await expect(tip.locator('line.line-lead-0')).toHaveCount(1);
-  await expect(tip.locator('line.line-lead-7')).toHaveCount(1);
-  await expect(chart).toHaveAttribute('aria-valuetext', /^Fri Jul 10: latest 0\.00 in/);
+  await expect(tip.locator('text.tip-title')).toHaveText('Fri 10');
+  expect(await tip.locator('text.tip-label').allTextContents()).toEqual(['7d before', 'now']);
+  expect(await tip.locator('text.tip-value').allTextContents()).toEqual(['0.15 in', '0.00 in']);
+  await expect(chart).toHaveAttribute('aria-valuenow', '0');
+  await expect(chart).toHaveAttribute('aria-valuetext', 'Fri 10: 7d before 0.15 in, now 0.00 in.');
 
-  // the next date, on the High metric: each lead shows that metric's value for that date
+  // Right moves to the next lead (6 days before: 0.10 in); Left goes back
   await page.keyboard.press('ArrowRight');
-  await expect(tip.locator('text.tip-title')).toHaveText('Sat Jul 11');
-  await page.locator('#changes').getByRole('button', { name: 'High', exact: true }).click();
-  await chart.focus();
-  expect(await values()).toEqual(['79 F', '80 F', '81 F', '79 F', '80 F', '81 F', '79 F', '80 F']);
-  await expect(chart).toHaveAttribute('aria-valuetext', /^Sat Jul 11: latest 79 F/);
+  expect(await tip.locator('text.tip-label').allTextContents()).toEqual(['6d before', 'now']);
+  expect(await tip.locator('text.tip-value').allTextContents()).toEqual(['0.10 in', '0.00 in']);
+  await expect(chart).toHaveAttribute('aria-valuenow', '1');
+  await page.keyboard.press('ArrowLeft');
+  await expect(chart).toHaveAttribute('aria-valuenow', '0');
 
-  // a pointer at the right edge snaps to the last date, whose box would pass the plot's right edge: it flips left
-  const width = Number(await chart.getAttribute('width'));
-  const box = (await chart.boundingBox())!;
-  await chart.hover({ position: { x: box.width - 4, y: 120 } });
-  const cross = Number(await chart.locator('line.crosshair').getAttribute('x1'));
-  const tx = Number(/translate\(([-\d.]+) /.exec((await tip.getAttribute('transform')) ?? '')?.[1]);
-  const tw = Number(await tip.locator('rect.tip-bg').getAttribute('width'));
-  expect(tx).toBeLessThan(cross);
-  expect(tx + tw).toBeLessThanOrEqual(width - 10);
+  // Down moves one row of the grid (cols panels on), or one panel when the grid is a single row; PageDown and PageUp
+  // move one panel. Seven panels: the last index is 6, so every step is clamped to it.
+  const { cols, rows } = await gridShape(page);
+  const down = rows === 1 ? 1 : cols;
+  await page.keyboard.press('ArrowDown');
+  await expect(tip.locator('text.tip-title')).toHaveText(FACET_TITLES[down]);
+  await page.keyboard.press('PageDown');
+  await expect(tip.locator('text.tip-title')).toHaveText(FACET_TITLES[Math.min(down + 1, 6)]);
+  await page.keyboard.press('PageUp');
+  await expect(tip.locator('text.tip-title')).toHaveText(FACET_TITLES[down]);
 
-  await chart.focus();
+  // Escape clears the tooltip, the crosshairs and the value text
   await page.keyboard.press('Escape');
   await expect(tip).toHaveCount(0);
+  await expect(chart.locator('line.crosshair')).toHaveCount(0);
   await expect(chart).not.toHaveAttribute('aria-valuetext');
+  await expect(chart).not.toHaveAttribute('aria-valuenow');
+
+  // Tomorrow is one day ahead, so its 1d lead is not issued: a dash, not the copied value (0.00 in)
+  for (const k of ['ArrowRight', 'PageDown', 'PageDown', 'PageDown']) await page.keyboard.press(k);
+  await expect(tip.locator('text.tip-title')).toHaveText('Tomorrow');
+  for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowRight');
+  expect(await tip.locator('text.tip-label').allTextContents()).toEqual(['1d before', 'now']);
+  expect(await tip.locator('text.tip-value').allTextContents()).toEqual(['–', '0.15 in']);
+  await expect(chart).toHaveAttribute('aria-valuetext', 'Tomorrow: 1d before –, now 0.15 in.');
+});
+
+test('mocked: a tooltip near the right edge of its panel flips inside it', async ({ page }) => {
+  await setup(page);
+  await page.goto(`/stations/${ID}`);
+  const tip = page.getByTestId('tip-changes');
+  await page.getByTestId('changes-chart').scrollIntoViewIfNeeded();
+  const f = (await facet(page, '2026-07-14').boundingBox())!;
+  await page.mouse.move(f.x + f.width - 4, f.y + 90);
+  await expect(tip).toHaveCount(1);
+  const tb = (await tip.boundingBox())!;
+  expect(tb.x + tb.width).toBeLessThanOrEqual(f.x + f.width + 0.5);
+  expect(tb.x).toBeGreaterThanOrEqual(f.x - 0.5);
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
 });
 
 test('mocked: ensemble null hides ribbons; stale shows the saved-at line', async ({ page }) => {
@@ -453,41 +546,43 @@ test('mocked: ensemble null hides ribbons; stale shows the saved-at line', async
   await expect(page.getByTestId('stale-note')).toContainText('; refreshing failed.');
 });
 
-test('mocked: change view requests today..today+6, draws 8 leads, a table, attribution and model', async ({ page }) => {
+test('mocked: change view requests today..today+6, draws a panel per day with its legend, table, attribution and model', async ({ page }) => {
   const hits = await setup(page);
   await page.goto(`/stations/${ID}`);
   const chart = page.getByTestId('changes-chart');
-  await expect(chart.locator('path.line-lead-0')).toBeAttached();
-  for (let i = 0; i < 8; i++) await expect(chart.locator(`path.line-lead-${i}`)).toBeAttached();
+  await expect(chart).toBeVisible();
   expect(hits.changes[0].searchParams.get('from')).toBe('2026-07-10');
   expect(hits.changes[0].searchParams.get('to')).toBe('2026-07-16');
-  await expect(page.getByTestId('changes-table').locator('tbody tr')).toHaveCount(7);
-  await expect(page.getByTestId('changes-table').locator('tbody tr').first()).toContainText('moved by');
-  // a null point breaks the line (lead 4 on day 3 for rain)
-  const d4 = await chart.locator('path.line-lead-4').getAttribute('d');
-  expect((d4!.match(/M/g) ?? []).length).toBe(2);
-  // the legend names each lead with its own swatch (same class as the line)
+  // the legend names the three marks the grid draws
   const legend = page.getByTestId('legend-changes');
-  await expect(legend.locator('text.legend-label')).toHaveText(['latest', '1 day earlier', '2 days earlier', '3 days earlier', '4 days earlier', '5 days earlier', '6 days earlier', '7 days earlier']);
+  await expect(legend.locator('text.legend-label')).toHaveText(['Forecast', 'Latest', 'Not issued']);
   // no legend label runs past the plot's right edge
   const plotRight = (await chart.boundingBox())!.x + (await chart.boundingBox())!.width;
   for (const t of await legend.locator('text.legend-label').all()) {
     expect((await t.boundingBox())!.x + (await t.boundingBox())!.width).toBeLessThanOrEqual(plotRight + 0.5);
   }
-  // the chart title names the selected metric, and the last x label is not clipped
-  await expect(page.locator('figcaption', { hasText: 'by lead time' })).toHaveText('Rain by lead time');
+  // the caption names the selected metric; rain draws one bar per issued lead, with the null lead (4 days before) left empty
+  const caption = page.locator('figure', { has: chart }).locator('figcaption strong');
+  await expect(caption).toHaveText('Rain');
+  await expect(facet(page, '2026-07-12').locator('rect.bar-precip')).toHaveCount(7);
+  // the table: one row per day, the range column, and the not-issued and null blanks
+  const table = page.getByTestId('changes-table');
+  await expect(table.locator('tbody tr')).toHaveCount(7);
+  await expect(table.locator('tbody tr').first().locator('td').last()).toHaveText('0.00–0.15');
+  await expect(table.locator('tbody tr').nth(2).locator('td').nth(4)).toHaveText('-');
+  // High draws one solid line per panel, and its latest level is a dashed line of another dash
   await page.getByRole('button', { name: 'High', exact: true }).click();
-  await expect(page.locator('figcaption', { hasText: 'by lead time' })).toHaveText('High by lead time');
-  const lastLabel = chart.locator('text').filter({ hasText: 'Jul 16' });
-  await expect(lastLabel).toHaveAttribute('text-anchor', 'end');
-  for (let i = 0; i < 8; i++) await expect(legend.locator(`.line-lead-${i}`)).toHaveCount(1);
-  // the lead lines have pairwise different dashes (colour alone does not separate neighbours)
-  const dashes = await Promise.all(Array.from({ length: 8 }, (_, i) => chart.locator(`path.line-lead-${i}`).evaluate((el) => getComputedStyle(el).strokeDasharray)));
-  expect(new Set(dashes).size).toBe(8);
+  await expect(caption).toHaveText('High');
+  await expect(chart.locator('path.line-facet')).toHaveCount(7);
+  const dashes = await Promise.all([
+    facet(page, '2026-07-12').locator('line.ref-latest').evaluate((el) => getComputedStyle(el).strokeDasharray),
+    facet(page, '2026-07-12').locator('path.line-facet').evaluate((el) => getComputedStyle(el).strokeDasharray)
+  ]);
+  expect(dashes[0]).not.toBe('none');
+  expect(dashes[1]).toBe('none');
   const captions = await page.getByTestId('provenance').allInnerTexts();
   expect(captions.join('\n')).toContain('Weather data by Open-Meteo.com (CC BY 4.0)');
   expect(captions.join('\n')).toContain('gfs_seamless');
-  expect(captions.join('\n')).toContain('day offsets, not model runs');
   // footer attribution too
   await expect(page.getByRole('link', { name: 'Open-Meteo.com' })).toHaveAttribute('href', 'https://open-meteo.com/');
 });

@@ -5,13 +5,14 @@ import {
   arrowIndexes,
   arrowRotation,
   dayCells,
+  dayLeads,
   dayNight,
   forecastBand,
   forecastRedirectTarget,
   hourlyWindow,
   iconFor,
-  leadLabel,
-  leadSeries,
+  changesToday,
+  leadIssued,
   localDayKey,
   midnightIndexes,
   nowX,
@@ -49,23 +50,106 @@ describe('forecast transforms', () => {
     expect(w.deterministic!.temperature_f).toHaveLength(FORECAST_HOURLY_DAYS * 24);
     expect(w.ensemble!.temperature_f.p50).toHaveLength(FORECAST_HOURLY_DAYS * 24);
   });
-  it('leadSeries returns 8 series with nulls kept', () => {
-    const c = forecastChanges();
-    const s = leadSeries(c, 'precip_in');
-    expect(s).toHaveLength(8);
-    expect(s[0]).toHaveLength(c.days.length);
-    expect(s[4][2]).toBeNull();
-    expect(leadSeries(c, 'prob_precip_max')[0][0]).toBeNull();
-  });
-  it('labels leads', () => {
-    expect(leadLabel(0)).toBe('latest');
-    expect(leadLabel(1)).toBe('1 day earlier');
-    expect(leadLabel(7)).toBe('7 days earlier');
-  });
   it('spreadAcrossLeads ignores nulls and needs two values', () => {
     const c = forecastChanges();
-    expect(spreadAcrossLeads(c.days[0], 'tmax_f')).toEqual({ min: 80, max: 82 });
-    expect(spreadAcrossLeads({ ...c.days[0], tmax_f: [null, null, 5, null] }, 'tmax_f')).toBeNull();
+    expect(spreadAcrossLeads(c.days[0], 'tmax_f', '2026-07-12')).toEqual({ min: 80, max: 82 });
+    expect(spreadAcrossLeads({ ...c.days[0], tmax_f: [null, null, 5, null] }, 'tmax_f', '2026-07-12')).toBeNull();
+  });
+  it('spreadAcrossLeads leaves out not-issued copies (the moved-by note uses issued values only)', () => {
+    const c = forecastChanges();
+    // day 4 (2026-07-14) with today 2026-07-12: leads 1 and 2 are copies, so only the issued leads count
+    const day = { ...c.days[4], tmax_f: [70, 999, 999, 75, 72, 71, 73, 74] };
+    expect(spreadAcrossLeads(day, 'tmax_f', '2026-07-12')).toEqual({ min: 70, max: 75 });
+  });
+});
+
+describe('changesToday (station-local today from the response)', () => {
+  const base = forecastChanges();
+  it('reads the station date, not the UTC date, near local midnight (Denver is still the 12th at 23:30)', () => {
+    // 2026-07-13T05:30Z is 2026-07-12 23:30 in America/Denver (MDT, UTC-6)
+    expect(changesToday({ ...base, timezone: 'America/Denver', generated_at: '2026-07-13T05:30:00Z' })).toBe('2026-07-12');
+  });
+  it('moves the other way for a zone ahead of UTC (Auckland is already the 13th at 00:00)', () => {
+    // 2026-07-12T12:00Z is 2026-07-13 00:00 in Pacific/Auckland (NZST, UTC+12)
+    expect(changesToday({ ...base, timezone: 'Pacific/Auckland', generated_at: '2026-07-12T12:00:00Z' })).toBe('2026-07-13');
+  });
+});
+
+describe('leadIssued (proposal 09 section 5, moved here from the chart layout in phase 2)', () => {
+  it('always issues lead 0, the latest run', () => {
+    expect(leadIssued('2026-11-01', 0, '2026-11-01')).toBe(true);
+    expect(leadIssued('2026-11-09', 0, '2026-11-01')).toBe(true);
+  });
+
+  it('issues every lead for a past target date', () => {
+    for (let lead = 0; lead <= 7; lead++) {
+      expect(leadIssued('2026-10-30', lead, '2026-11-01')).toBe(true);
+    }
+  });
+
+  it('issues every lead for today (each was issued on an earlier day)', () => {
+    for (let lead = 0; lead <= 7; lead++) {
+      expect(leadIssued('2026-11-01', lead, '2026-11-01')).toBe(true);
+    }
+  });
+
+  it('for a date 1 day ahead, lead 1 is not yet issued (copy of lead 0) and lead 2 is', () => {
+    expect(leadIssued('2026-11-02', 1, '2026-11-01')).toBe(false);
+    expect(leadIssued('2026-11-02', 2, '2026-11-01')).toBe(true);
+  });
+
+  it('for a date 4 days ahead, leads 1 to 4 are not yet issued and lead 5 is', () => {
+    const issued = Array.from({ length: 8 }, (_, lead) => leadIssued('2026-11-05', lead, '2026-11-01'));
+    expect(issued).toEqual([true, false, false, false, false, true, true, true]);
+  });
+
+  it('for a date 8 days ahead, only lead 0 is issued', () => {
+    const issued = Array.from({ length: 8 }, (_, lead) => leadIssued('2026-11-09', lead, '2026-11-01'));
+    expect(issued).toEqual([true, false, false, false, false, false, false, false]);
+  });
+
+  it('counts across a month boundary', () => {
+    // target 2026-11-02, lead 3 was issued 2026-10-30 (before today); lead 2 on 2026-10-31 (also before today)
+    expect(leadIssued('2026-11-02', 2, '2026-11-01')).toBe(true);
+    expect(leadIssued('2026-11-02', 1, '2026-11-01')).toBe(false);
+  });
+});
+
+describe('dayLeads (proposal 09 phase 1)', () => {
+  // Fixture target dates are 2026-07-10 to 2026-07-16 (index 0 to 6); today is 2026-07-12 in these tests.
+  const TODAY = '2026-07-12';
+  it('returns the leads oldest first, lead 7 to lead 0, with values and the issued flag', () => {
+    const c = forecastChanges();
+    const leads = dayLeads(c.days[0], 'tmax_f', TODAY);
+    expect(leads.map((l) => l.lead)).toEqual([7, 6, 5, 4, 3, 2, 1, 0]);
+    expect(leads[7]).toEqual({ lead: 0, value: c.days[0].tmax_f[0], issued: true });
+    expect(leads[0].value).toBe(c.days[0].tmax_f[7]);
+  });
+  it('keeps the API value null where the API has none', () => {
+    const c = forecastChanges();
+    // day 2 (2026-07-12) lead 4 is null in the fixture (precip_in)
+    const leads = dayLeads(c.days[2], 'precip_in', TODAY);
+    expect(leads.find((l) => l.lead === 4)).toEqual({ lead: 4, value: null, issued: true });
+    expect(dayLeads(c.days[0], 'prob_precip_max', TODAY).every((l) => l.value === null)).toBe(true);
+  });
+  it('marks leads a date k days ahead has not issued (leads 1 to k), per leadIssued', () => {
+    const c = forecastChanges();
+    // day 4 is 2026-07-14, two days after today: leads 1 and 2 are copies, lead 0 and leads 3 to 7 are issued
+    const issued = dayLeads(c.days[4], 'tmax_f', TODAY).map((l) => [l.lead, l.issued]);
+    expect(issued).toEqual([
+      [7, true],
+      [6, true],
+      [5, true],
+      [4, true],
+      [3, true],
+      [2, false],
+      [1, false],
+      [0, true]
+    ]);
+  });
+  it('issues every lead for a past target date', () => {
+    const c = forecastChanges();
+    expect(dayLeads(c.days[0], 'precip_in', TODAY).every((l) => l.issued)).toBe(true);
   });
 });
 
