@@ -219,9 +219,11 @@ Two exceptions:
 
 ## Deploying (future)
 
+**Step-by-step runbook: [`docs/DEPLOY.md`](docs/DEPLOY.md).** The checklist below is the short version.
+
 Not deployed yet. Deployment is a one-time, hands-on setup by Rodney. The full runbook is [`docs/guides/06-deploy-ops.md`](docs/guides/06-deploy-ops.md) section 15.1 (Supabase setup in section 7, Netlify in section 8, secrets in section 12). Expected cost is about $4 to $6 a month. This is the order. Every deploy step is Rodney's to run (credentials and approvals; the guides forbid agents from touching production), so "Rodney only" is not repeated on each line.
 
-**Not built yet:** the GitHub Actions workflows (`.github/` does not exist), the Fly configs and one-off helper (`ops/fly/`), the backup image and script (`ops/backup/`), and the CI helper scripts (`ops/ci/`). The runbook describes them, but they have to be written before a first deploy. Today the first-deploy runbook cannot be followed end to end.
+**Not built yet:** `ops/fly/site-url.txt` (the production origin, known only once the Netlify site exists). The Fly configs and one-off helper (`ops/fly/`), the backup image and script (`ops/backup/`, tested locally by `ops/backup/test.sh`) and the CI helper scripts (`ops/ci/`) are written. Not yet proven, because they need real accounts: `flyctl config validate` and the `--dockerfile` path (first deploy job), and the `run-oneoff.sh` dry run on Fly (guide 06 section 16, task 2). The GitHub Actions workflows and `.github/dependabot.yml` are written and pass `actionlint`, and `backend/deny.toml` passes `cargo deny check`, but no workflow has run on GitHub yet. Until those pass, treat the first-deploy runbook as unrehearsed.
 
 Checklist:
 
