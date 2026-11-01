@@ -1,0 +1,31 @@
+app = "famweather-poller"
+primary_region = "sjc"
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[deploy]
+  strategy = "rolling"          # replace in place; catch-up on start covers the gap
+
+[processes]
+  poller = "/usr/local/bin/poller"
+
+[env]
+  APP_ENV = "production"
+  AWN_MODE = "live"
+  POLLER_ENABLED = "true"
+  RUST_LOG = "info"
+
+# No HTTP service and no network services: the poller is not reachable from the network.
+# It must never stop: missed AWN polls cannot be backfilled once they age out of Ambient's history
+# (F3, P3; forecasts are fetched live by the API, proposals/06).
+
+# SIGTERM: poller grace is 25 s (03); kill_timeout above (30 s) must stay larger.
+
+[[restart]]
+  processes = ["poller"]
+  policy = "always"
+
+[[vm]]
+  processes = ["poller"]
+  size = "shared-cpu-1x"
+  memory = "256mb"

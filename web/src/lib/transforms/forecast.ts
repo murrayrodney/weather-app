@@ -1,6 +1,6 @@
 // Forecast transforms. No percentile maths here: the API computes every p10/p50/p90.
 import type { Band, BandSeries, Forecast, ForecastChanges } from '$lib/api/types';
-import { zoneDate } from './dates';
+import { addDays, localDate, zoneDate } from './dates';
 import type { Pt } from './series';
 
 interface ForecastBand {
@@ -214,18 +214,47 @@ export function accumDomain(w: HourlyWindow): [number, number] {
 
 export type ChangeMetric = 'precip_in' | 'prob_precip_max' | 'tmax_f' | 'tmin_f';
 
-/** One series per lead (index = lead day), x = day index; nulls stay null. */
-export function leadSeries(changes: ForecastChanges, metric: ChangeMetric): (Pt | null)[][] {
-  return changes.lead_days.map((_, li) => changes.days.map((d, x) => pt(d[metric][li] ?? null, x)));
+/**
+ * Today's date in the station's zone (YYYY-MM-DD), taken from the response: `generated_at` is the instant the
+ * forecast was made, and `timezone` is the station's zone. The page uses it for "today" in the change view.
+ */
+export function changesToday(changes: ForecastChanges): string {
+  return localDate(changes.timezone, new Date(changes.generated_at));
 }
 
-export function leadLabel(n: number): string {
-  if (n === 0) return 'latest';
-  return n === 1 ? '1 day earlier' : `${n} days earlier`;
+/**
+ * Whether lead N of target date D was issued by `today` (all YYYY-MM-DD, station-local). Lead 0 (the latest run)
+ * always is. Lead N was issued on D minus N days, so it counts only when that day is before today. Checked against
+ * the Previous Runs API on 2026-11-01 (proposal 09 section 5): for a date k days ahead, leads 1 to k are copies of
+ * lead 0, so lead k is not yet issued (strict, not "today or earlier").
+ */
+export function leadIssued(date: string, lead: number, today: string): boolean {
+  if (lead === 0) return true;
+  return addDays(date, -lead) < today;
 }
 
-export function spreadAcrossLeads(day: ForecastChanges['days'][number], metric: ChangeMetric): { min: number; max: number } | null {
-  const vals = day[metric].filter((v): v is number => v !== null && v !== undefined);
+export interface DayLead {
+  lead: number; // lead days before the target date (0 = latest run)
+  value: number | null; // the API's value, null where the API has none
+  issued: boolean; // false for a lead the API filled with a copy of the latest run (proposal 09 section 5)
+}
+
+/**
+ * One target day's leads for a metric, oldest first (lead 7 to lead 0). The lead is the array index, since the
+ * API lists `lead_days` as 0 to 7 in order. `today` is the station-local date (YYYY-MM-DD).
+ */
+export function dayLeads(day: ForecastChanges['days'][number], metric: ChangeMetric, today: string): DayLead[] {
+  const arr = day[metric];
+  const out: DayLead[] = [];
+  for (let lead = arr.length - 1; lead >= 0; lead--) {
+    out.push({ lead, value: arr[lead] ?? null, issued: leadIssued(day.date, lead, today) });
+  }
+  return out;
+}
+
+/** The range of a day's issued, non-null values (proposal 09 section 5: not-issued copies are left out). */
+export function spreadAcrossLeads(day: ForecastChanges['days'][number], metric: ChangeMetric, today: string): { min: number; max: number } | null {
+  const vals = dayLeads(day, metric, today).flatMap((l) => (l.issued && l.value !== null ? [l.value] : []));
   if (vals.length < 2) return null;
   return { min: Math.min(...vals), max: Math.max(...vals) };
 }

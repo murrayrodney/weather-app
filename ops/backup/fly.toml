@@ -1,0 +1,5 @@
+# Minimal on purpose (06 section 6): the image ENTRYPOINT is the script, the machine is created with
+# `fly machine run --restart no --schedule daily`, and env is passed with -e (a toml [env] is not
+# applied to machines created that way).
+app = "famweather-backup"
+primary_region = "sjc"

@@ -1,0 +1,47 @@
+# cargo-deny policy (06 section 11.2). CI runs `check advisories bans licenses sources` (backend.yml, supply-chain).
+
+[graph]
+# No `targets` key: all platforms in the lockfile are checked (including the Windows and macOS-only crates).
+all-features = false
+
+[advisories]
+yanked = "deny"
+# Each ignore is a known advisory with no fix that does not reach a production binary. Re-check when bumping.
+ignore = [
+    # rsa (Marvin timing attack, no patched release exists). Only a dev-dependency of the api crate, used to
+    # generate throwaway RSA keys for JWT tests. Not in any shipped binary.
+    { id = "RUSTSEC-2023-0071", reason = "rsa is an api dev-dependency (test key generation only); no fix exists" },
+    # crypto-bigint 0.5.5, via elliptic-curve -> p256, again an api dev-dependency (test signing keys) only.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.x is reached only through p256, an api dev-dependency" },
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",                 # foldhash
+    "CDLA-Permissive-2.0",  # webpki-roots (the Mozilla root list data)
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+# Workspace crates are publish = false and carry no license field.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+# rustls policy: no OpenSSL anywhere in the tree.
+deny = [
+    { crate = "openssl" },
+    { crate = "openssl-sys" },
+    { crate = "native-tls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

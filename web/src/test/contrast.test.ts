@@ -121,14 +121,6 @@ export const TOKEN_CLASS: Record<string, TokenKind> = {
   'c-tmin': 'line',
   'c-current': 'line',
   'c-prior': 'line',
-  'c-lead-0': 'line',
-  'c-lead-1': 'line',
-  'c-lead-2': 'line',
-  'c-lead-3': 'line',
-  'c-lead-4': 'line',
-  'c-lead-5': 'line',
-  'c-lead-6': 'line',
-  'c-lead-7': 'line',
   'c-now': 'line',
   'c-crosshair': 'line',
   'c-band-outer': 'fill',
@@ -205,8 +197,8 @@ export const UI_PAIRS: [string, string][] = [
 ];
 
 // Dash patterns (proposal 08 section 4). Each panel lists the line classes it draws; within a panel every
-// line's stroke-dasharray must be distinct, so no two lines can share a pattern. Leads are one panel because the
-// changes chart draws all eight in one plot. Bars, bands, fills and the Now/crosshair/day lines are not listed.
+// line's stroke-dasharray must be distinct, so no two lines can share a pattern. Bars, bands, fills and the
+// Now/crosshair/day lines are not listed.
 export const PANEL_LINES: Record<string, string[]> = {
   'stack temperature': ['line-forecast', 'line-median', 'line-feels', 'line-dew', 'ref-freeze'],
   'stack precipitation': ['range-precip', 'line-accum', 'line-median', 'line-prob'],
@@ -215,7 +207,8 @@ export const PANEL_LINES: Record<string, string[]> = {
   'daily temperature': ['line-tmax', 'line-tmin', 'line-median'],
   'daily precipitation': ['line-forecast', 'line-median'],
   cumulative: ['line-current', 'line-current-partial', 'line-median', 'line-prior'],
-  'changes leads': ['line-lead-0', 'line-lead-1', 'line-lead-2', 'line-lead-3', 'line-lead-4', 'line-lead-5', 'line-lead-6', 'line-lead-7']
+  // proposal 09 phase 2: the facet panels' data line and the latest level line (solid against dashed)
+  'changes facets': ['line-facet', 'ref-latest']
 };
 
 /**
@@ -354,7 +347,7 @@ describe('dash patterns', () => {
 
   it('PANEL_LINES covers every chart panel', () => {
     expect(Object.keys(PANEL_LINES)).toEqual(
-      expect.arrayContaining(['stack temperature', 'stack precipitation', 'stack sky', 'stack wind', 'daily temperature', 'cumulative', 'changes leads'])
+      expect.arrayContaining(['stack temperature', 'stack precipitation', 'stack sky', 'stack wind', 'daily temperature', 'cumulative', 'changes facets'])
     );
   });
 

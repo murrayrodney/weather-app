@@ -1,8 +1,8 @@
 // Tooltip rows for the charts (proposal 08 section 2.2). Pure: each builder returns the rows of one hovered step. Labels
 // are the chart's legend labels, and each row's swatch class is the legend's class for that series, so a tooltip reads
 // as a legend for the values under the pointer. ChartTooltip.svelte draws the boxes from these rows.
-import type { BandSeries, ForecastChanges } from '$lib/api/types';
-import { leadLabel, type ChangeMetric } from '$lib/transforms/forecast';
+import type { BandSeries } from '$lib/api/types';
+import type { ChangeMetric, DayLead } from '$lib/transforms/forecast';
 import { fmtRange, fmtValue, type TipRow } from './tooltip';
 
 /** One day of the daily view: the deterministic row and the ensemble row for the same date (either may be absent). */
@@ -55,22 +55,28 @@ export function dailyPrecipRows(det: DetDay | undefined, ens: EnsDay | undefined
   return rows;
 }
 
-const CHANGE_FORMAT: Record<ChangeMetric, { digits: number; suffix: string }> = {
-  precip_in: { digits: 2, suffix: ' in' },
-  prob_precip_max: { digits: 0, suffix: '%' },
-  tmax_f: { digits: 0, suffix: ' F' },
-  tmin_f: { digits: 0, suffix: ' F' }
+const FACET_VALUE: Record<ChangeMetric, (v: number) => string> = {
+  precip_in: (v) => `${v.toFixed(2)} in`,
+  prob_precip_max: (v) => `${Math.round(v)}%`,
+  tmax_f: (v) => `${Math.round(v)}°`,
+  tmin_f: (v) => `${Math.round(v)}°`
 };
 
-/** The changes chart's rows for one target date: one row per lead, labelled as the legend, in lead order. */
-export function changeRows(leads: number[], metric: ChangeMetric, day: ForecastChanges['days'][number]): TipRow[] {
-  const f = CHANGE_FORMAT[metric];
-  return leads.map((n, k) => ({
-    label: leadLabel(n),
-    value: fmtValue(day[metric][k], f.digits, f.suffix),
-    mark: 'line',
-    cls: 'line-lead-' + n
-  }));
+/**
+ * The changes grid's tooltip rows for one panel (proposal 09 decision 6: terse). The hovered lead as `3d before 49°`,
+ * then `now 49°` (lead 0, the latest run). At lead 0 the hovered row is the same as `now`, so only `now` is listed. A
+ * lead that is not issued shows `–`, and a null value shows `-` (the table's own marks for the two); no value is
+ * invented. The swatch is the tone of the metric.
+ */
+export function facetRows(metric: ChangeMetric, hovered: DayLead, latest: DayLead): TipRow[] {
+  const value = (l: DayLead) => (!l.issued ? '–' : l.value === null ? '-' : FACET_VALUE[metric](l.value));
+  // Rain is bars, so its swatch is the bar class (fill --c-rain-bar, the rain tone). The other metrics are lines, whose
+  // stroke is --tone from the chart's tone class.
+  const swatch = metric === 'precip_in' ? { mark: 'bar' as const, cls: 'bar-precip' } : { mark: 'line' as const, cls: 'line-facet' };
+  const rows: TipRow[] = [];
+  if (hovered.lead > 0) rows.push({ label: `${hovered.lead}d before`, value: value(hovered), ...swatch });
+  rows.push({ label: 'now', value: value(latest), ...swatch });
+  return rows;
 }
 
 /** The values of one cumulative-chart step; each is null when the step has no value there. */

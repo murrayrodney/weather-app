@@ -8,7 +8,7 @@ TESTRUN = $(T) build api && { $(1); rc=$$?; ./ops/local/check-secret-logs.sh "$(
 JOB := $(C) run --rm --no-deps poller poller run-job
 
 envval = $(shell grep -E '^$(1)=' .env 2>/dev/null | head -1 | cut -d= -f2-)
-.PHONY: init build web-build up down logs logs-pretty ps migrate seed invite reset-link add-station e2e-data psql web-dev \
+.PHONY: init build web-build up down logs logs-pretty ps migrate seed invite reset-link keygen add-station e2e-data psql web-dev \
         poller-replay poller-idle live check-local-only check-api-features test test-backend test-web test-db test-e2e smoke reset
 
 # `up` does not use `up -d --wait`: Compose 5.x counts an exited one-shot (auth-access, migrate) as a failed wait even
@@ -30,6 +30,7 @@ invite:          ; @test -n "$(EMAIL)" || (echo "usage: make invite EMAIL=you@ex
 	$(ADMIN) invite --email "$(EMAIL)" --display-name "$(NAME)" $(if $(FOLLOW_ALL),--follow-all)
 reset-link:      ; @test -n "$(EMAIL)" || (echo "usage: make reset-link EMAIL=you@example.com"; exit 1)
 	$(ADMIN) reset-link --email "$(EMAIL)"
+keygen:          ; $(C) --profile tools run --rm --no-deps -T admin admin keygen
 add-station:     ; $(C) --profile tools run --rm admin admin add-station $(ARGS)
 e2e-data:        ; ./ops/local/e2e-data.sh
 psql:            ; $(C) exec db psql -U postgres -d postgres

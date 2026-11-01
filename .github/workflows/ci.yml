@@ -1,0 +1,44 @@
+name: ci
+on:
+  pull_request:                     # deliberately no `paths:` so this workflow, and therefore `ci-ok`, always reports
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.f.outputs.backend }}
+      web: ${{ steps.f.outputs.web }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - id: f
+        env: { BASE_SHA: "${{ github.event.pull_request.base.sha }}" }
+        run: |
+          changed="$(git diff --name-only "$BASE_SHA" "$GITHUB_SHA")"
+          hit() { printf '%s\n' "$changed" | grep -Eq "$1" && echo true || echo false; }
+          echo "backend=$(hit '^(backend/|ops/|Makefile$|docker-compose|\.env\.example$|\.github/)')" >> "$GITHUB_OUTPUT"
+          echo "web=$(hit '^(web/|ops/caddy/|\.github/)')" >> "$GITHUB_OUTPUT"
+  backend:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    uses: ./.github/workflows/backend.yml
+  web:
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
+    uses: ./.github/workflows/web.yml
+  ci-ok:                            # THE required check on main; runs always, even when the jobs above were skipped
+    if: ${{ always() }}
+    needs: [changes, backend, web]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: fail if any needed job failed or was cancelled (skipped is fine)
+        env: { RESULTS: "${{ join(needs.*.result, ' ') }}" }
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1 ;; esac

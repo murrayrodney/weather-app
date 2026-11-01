@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ForecastChanges } from '$lib/api/types';
-import { changeRows, cumulativeRows, dailyPrecipRows, dailyTempRows, hourTempRows } from './tipRows';
+import type { DayLead } from '$lib/transforms/forecast';
+import { cumulativeRows, dailyPrecipRows, dailyTempRows, facetRows, hourTempRows } from './tipRows';
 
 const band = (p10: number, p50: number, p90: number) => ({ p10, p50, p90 });
 const det = { tmax_f: 80, tmin_f: 50, precip_in: 0.1, prob_precip_max: 30 };
@@ -53,33 +53,6 @@ describe('dailyPrecipRows', () => {
   });
 });
 
-const changes: ForecastChanges = {
-  station_id: 's',
-  timezone: 'America/Denver',
-  model: 'gfs_seamless',
-  generated_at: '2026-07-10T12:00:00Z',
-  attribution: 'a',
-  units: { temperature: 'F', precipitation: 'in' },
-  lead_days: [0, 1, 7],
-  days: [{ date: '2026-07-10', precip_in: [0.1, null, 0.25], prob_precip_max: [null, 20, 40], tmax_f: [80, 79.4, 77], tmin_f: [50, 49, 48] }]
-};
-
-describe('changeRows', () => {
-  it('lists one row per lead, labelled as the legend, with the lead class for the swatch', () => {
-    expect(changeRows(changes.lead_days, 'precip_in', changes.days[0])).toEqual([
-      { label: 'latest', value: '0.10 in', mark: 'line', cls: 'line-lead-0' },
-      { label: '1 day earlier', value: 'no value', mark: 'line', cls: 'line-lead-1' },
-      { label: '7 days earlier', value: '0.25 in', mark: 'line', cls: 'line-lead-7' }
-    ]);
-  });
-
-  it('formats each metric in its own unit', () => {
-    expect(changeRows(changes.lead_days, 'prob_precip_max', changes.days[0]).map((r) => r.value)).toEqual(['no value', '20%', '40%']);
-    expect(changeRows(changes.lead_days, 'tmax_f', changes.days[0]).map((r) => r.value)).toEqual(['80 F', '79 F', '77 F']);
-    expect(changeRows(changes.lead_days, 'tmin_f', changes.days[0]).map((r) => r.value)).toEqual(['50 F', '49 F', '48 F']);
-  });
-});
-
 describe('cumulativeRows', () => {
   const full = {
     thisYear: 1.2,
@@ -129,5 +102,31 @@ describe('hourTempRows', () => {
 
   it('leaves out the ensemble rows without an ensemble', () => {
     expect(hourTempRows(hourly, null, 0).map((r) => r.label)).toEqual(['Forecast', 'Feels like', 'Dew point']);
+  });
+});
+
+describe('facetRows', () => {
+  const at = (n: number, value: number | null, issued = true): DayLead => ({ lead: n, value, issued });
+
+  it('lists the hovered lead then now, terse: "3d before 49°" and "now 49°"', () => {
+    expect(facetRows('tmax_f', at(3, 49), at(0, 49))).toEqual([
+      { label: '3d before', value: '49°', mark: 'line', cls: 'line-facet' },
+      { label: 'now', value: '49°', mark: 'line', cls: 'line-facet' }
+    ]);
+  });
+
+  it('formats rain in inches with two decimals and chance of rain as a whole percentage', () => {
+    expect(facetRows('precip_in', at(1, 0.15), at(0, 0))[0]).toMatchObject({ value: '0.15 in', mark: 'bar', cls: 'bar-precip' });
+    expect(facetRows('prob_precip_max', at(2, 40.4), at(0, 39.6))).toMatchObject([{ value: '40%' }, { value: '40%' }]);
+  });
+
+  it('lists only now at lead 0, since the hovered value is the latest', () => {
+    expect(facetRows('tmin_f', at(0, 42), at(0, 42))).toEqual([{ label: 'now', value: '42°', mark: 'line', cls: 'line-facet' }]);
+  });
+
+  it('shows an en dash for a lead that is not issued and a hyphen for a null value, the table\'s own marks, without inventing one', () => {
+    expect(facetRows('tmax_f', at(4, 50, false), at(0, 52))).toMatchObject([{ label: '4d before', value: '–' }, { label: 'now', value: '52°' }]);
+    expect(facetRows('precip_in', at(2, null), at(0, 0.1))).toMatchObject([{ value: '-' }, { value: '0.10 in' }]);
+    expect(facetRows('precip_in', at(1, 0.2), at(0, null))[1]).toMatchObject({ label: 'now', value: '-' });
   });
 });

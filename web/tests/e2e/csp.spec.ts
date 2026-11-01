@@ -73,7 +73,8 @@ test('no CSP violations on signed-out and signed-in pages, including client navi
   await page.getByTestId('forecast-chart').hover({ position: { x: 300, y: 120 } });
   await expect(page.getByTestId('tip-daily')).toBeVisible();
   await w.expectClean('daily tooltip');
-  await page.getByTestId('changes-chart').hover({ position: { x: 300, y: 120 } });
+  // the changes grid's tooltip (proposal 09 phase 3) opens over the first panel's plot
+  await page.getByTestId('changes-chart').hover({ position: { x: 120, y: 90 } });
   await expect(page.getByTestId('tip-changes')).toBeVisible();
   await w.expectClean('changes tooltip');
 

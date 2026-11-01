@@ -213,6 +213,8 @@ export function forecast(over: Partial<Forecast> = {}): Forecast {
 
 export const forecastEnsembleNull = () => forecast({ ensemble: null });
 
+// Made on 2026-07-12 (Denver), so the window has two past days (10th, 11th), today (12th) and four days ahead
+// (13th to 16th), and the chart's not-issued rule is exercised (proposal 09 section 5).
 export function forecastChanges(): ForecastChanges {
   const dates = Array.from({ length: 7 }, (_, i) => `2026-07-${p2(10 + i)}`);
   const leads = [0, 1, 2, 3, 4, 5, 6, 7];
@@ -220,7 +222,7 @@ export function forecastChanges(): ForecastChanges {
     station_id: STATION_ID,
     timezone: 'America/Denver',
     model: 'gfs_seamless',
-    generated_at: '2026-07-10T12:00:00Z',
+    generated_at: '2026-07-12T12:00:00Z',
     attribution: 'Weather data by Open-Meteo.com (CC BY 4.0)',
     units: { temperature: 'F', precipitation: 'in' },
     lead_days: leads,
