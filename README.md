@@ -123,6 +123,7 @@ make up        # start again (data is still there)
 make reset     # stop AND delete all local data (database volume); start over with make up, make seed, make e2e-data
 make ps        # container status
 make logs      # follow logs from all services (Ctrl-C to stop watching)
+make logs-pretty            # follow the poller's logs, one readable line per job (SVC=api for another service; needs jq)
 docker compose logs -f api     # one service: api, poller, auth, caddy, db
 make psql      # SQL prompt on the local database (as the postgres superuser)
 ```

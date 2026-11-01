@@ -8,7 +8,7 @@ TESTRUN = $(T) build api && { $(1); rc=$$?; ./ops/local/check-secret-logs.sh "$(
 JOB := $(C) run --rm --no-deps poller poller run-job
 
 envval = $(shell grep -E '^$(1)=' .env 2>/dev/null | head -1 | cut -d= -f2-)
-.PHONY: init build web-build up down logs ps migrate seed invite reset-link add-station e2e-data psql web-dev \
+.PHONY: init build web-build up down logs logs-pretty ps migrate seed invite reset-link add-station e2e-data psql web-dev \
         poller-replay poller-idle live check-local-only check-api-features test test-backend test-web test-db test-e2e smoke reset
 
 # `up` does not use `up -d --wait`: Compose 5.x counts an exited one-shot (auth-access, migrate) as a failed wait even
@@ -21,6 +21,8 @@ up: build
 	./ops/local/wait-up.sh
 down:            ; $(C) down
 logs:            ; $(C) logs -f --tail=100
+# One readable line per event; SVC=poller (default) or api, auth, ...
+logs-pretty:     ; $(C) logs -f --tail=100 --no-log-prefix $(or $(SVC),poller) | jq --unbuffered -Rr -f ops/local/pretty-logs.jq
 ps:              ; $(C) ps -a
 migrate:         ; $(C) run --rm migrate
 seed:            ; $(ADMIN) seed-dev

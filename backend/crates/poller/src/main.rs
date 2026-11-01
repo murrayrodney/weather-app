@@ -41,7 +41,9 @@ async fn main() -> ExitCode {
             }
         }
         command => {
-            if redact::init_tracing(true).is_err() {
+            // Plain text in local Compose (readable in `docker compose logs` and Docker Desktop); JSON everywhere else.
+            let json = std::env::var("APP_ENV").as_deref() != Ok("local");
+            if redact::init_tracing(json).is_err() {
                 eprintln!("error: could not initialise logging");
                 return ExitCode::FAILURE;
             }
