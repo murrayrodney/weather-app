@@ -55,7 +55,7 @@ api = { path = ".", features = ["test-support"] }
 famweather-core = { workspace = true, features = ["test-support", "testdb"] }
 flate2.workspace = true
 http-body-util = "0.1"
-p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+p256 = { version = "0.14", features = ["ecdsa", "pem", "pkcs8"] }
 rand_core = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 rsa = "0.9"
 tempfile.workspace = true
