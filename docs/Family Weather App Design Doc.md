@@ -53,7 +53,7 @@ Version 1 succeeds if all family stations ingest reliably and the year-to-date r
 | Airport days run midnight to midnight in local standard time | Daylight-saving shifts or other day cut-offs skew comparisons | Compute GDD and rain days for the backyard stations in local standard time too, and note the day definition on the chart |
 | AWN history depth is undocumented | Backfill may be shorter than hoped | Run a one-time backfill per station and see how far it goes |
 | Open-Meteo's free archive and terms stay as they are | The forecast-change view and the forecast itself depend on it, with nothing stored as a backup | Checked on Oct 7, 2026 for all three stations (no gaps since January 2024, chance of rain since October 2024); if it ever goes away, add a small stored snapshot of the main forecast |
-| Ambient's rolling rain counters can reset before capture | Counter-based totals may be wrong | Derive totals from stored 5-minute counter changes as plain differences, treat a drop to near zero (under 0.05 in) as a reset, and reconcile each day against AWN's own daily total, flagging differences |
+| Ambient's rolling rain counters can reset before capture | Counter-based totals may be wrong | Derive totals from stored 5-minute counter changes as the rise above the running peak since the last reset (a drop that is not a reset is ignored), treat a drop to near zero (under 0.05 in) as a reset, and reconcile each day against AWN's own daily total, flagging differences |
 | Daily totals break at local midnight | DST shifts break UTC-day sums | Store UTC, convert at the edges using each station's own time zone (standard time for baseline comparisons) |
 
 **Constraints**

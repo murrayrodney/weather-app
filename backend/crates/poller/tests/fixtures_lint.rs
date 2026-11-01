@@ -228,7 +228,7 @@ fn lint(root: &Path, seed: &Seed) -> Vec<String> {
                 problems.push(format!("{name}: coordinates with more than 1 decimal"));
             }
         }
-        if name.starts_with("open-meteo/") {
+        if name.starts_with("open-meteo/") || name.starts_with("test/open-meteo/") {
             visit(&v, &mut |k, x| {
                 let Some(deg) = x.as_f64() else { return };
                 let near = |pick: fn(&(f64, f64)) -> f64| {

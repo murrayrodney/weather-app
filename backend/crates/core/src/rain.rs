@@ -1,9 +1,10 @@
 //! Rain increments from cumulative counters (F6, 03 section 7.3). Pure functions, no I/O.
 //!
 //! The console reports cumulative counters (`totalrainin`, `yearlyrainin`, `dailyrainin`). The increment of a
-//! reading is the plain difference to the previous reading. The one exception is a counter reset: when the counter
-//! drops to near zero (below [`consts::RESET_NEAR_ZERO_IN`]) the new value counts as rain from zero and the drop
-//! itself is not counted. Nothing else (Rodney, Oct 18, 2026).
+//! reading is its rise above the running peak since the last reset (a high-water mark): a drop that is not a reset
+//! is ignored and the climb back to the old peak is not counted twice (Rodney, Oct 31, 2026, from real data). A
+//! counter reset, a drop to near zero (below [`consts::RESET_NEAR_ZERO_IN`]), counts the new value as rain from zero
+//! and restarts the peak. Nothing else: no caps, glitch windows or noise thresholds (Oct 18, 2026).
 
 use chrono::{DateTime, Utc};
 
@@ -82,10 +83,26 @@ pub fn round3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
 }
 
-/// Increments over a contiguous, time-ordered series using the already chosen counter.
-/// A pair contributes only when both rows have a counter value. The increment is `cur - prev`; a drop to a value
-/// below `RESET_NEAR_ZERO_IN` is a reset and yields `cur` (rain from zero).
+/// Increments over a contiguous, time-ordered series using the already chosen counter, starting with no history
+/// before the first row. See [`increments_seeded`].
 pub fn increments(rows: &[RainRow]) -> Vec<Inc> {
+    increments_seeded(None, rows)
+}
+
+/// Increments with a high-water mark (Rodney, Oct 31, 2026, replacing plain differences).
+///
+/// The peak is the highest counter value since the last reset. Per reading with counter `c`:
+/// - a drop to a value below `RESET_NEAR_ZERO_IN` is a reset: `inc = c` (rain from zero) and the peak becomes `c`;
+/// - otherwise `inc = max(0, c - peak)` and the peak becomes `max(peak, c)`, so a drop that is not a reset is
+///   ignored and the rise back to the old peak is not counted twice.
+///
+/// A reading counts only when it and the previous reading both have a counter value (the first row of the series
+/// has no previous reading, so its `inc` is `None`). A reading with no counter leaves the peak unchanged.
+///
+/// `seed_peak` is the peak reached before `rows[0]`: for a window that starts mid-history, the maximum counter value
+/// from the last reset up to and including the first row (the predecessor), see the poller's seed query. `None`
+/// means no history, and the peak starts at the first row's value.
+pub fn increments_seeded(seed_peak: Option<f64>, rows: &[RainRow]) -> Vec<Inc> {
     let mut out: Vec<Inc> = rows
         .iter()
         .map(|r| Inc {
@@ -94,17 +111,33 @@ pub fn increments(rows: &[RainRow]) -> Vec<Inc> {
             reset: false,
         })
         .collect();
-    for (pair, item) in rows.windows(2).zip(out.iter_mut().skip(1)) {
-        let (Some(prev), Some(cur)) = (pair[0].counter.map(round3), pair[1].counter.map(round3))
-        else {
+    let mut peak: Option<f64> = seed_peak.map(round3);
+    let mut prev_has_value = false;
+    for (i, (row, item)) in rows.iter().zip(out.iter_mut()).enumerate() {
+        let Some(cur) = row.counter.map(round3) else {
+            prev_has_value = false;
             continue;
         };
-        if cur < prev && cur < RESET_NEAR_ZERO_IN {
-            item.inc = Some(cur);
-            item.reset = true;
-        } else {
-            item.inc = Some(round3(cur - prev));
+        match peak {
+            None => peak = Some(cur),
+            Some(p) if i == 0 => peak = Some(p.max(cur)),
+            Some(p) => {
+                let is_reset = cur < p && cur < RESET_NEAR_ZERO_IN;
+                if is_reset {
+                    peak = Some(cur);
+                    if prev_has_value {
+                        item.inc = Some(cur);
+                        item.reset = true;
+                    }
+                } else {
+                    if prev_has_value {
+                        item.inc = Some(round3((cur - p).max(0.0)));
+                    }
+                    peak = Some(p.max(cur));
+                }
+            }
         }
+        prev_has_value = true;
     }
     out
 }
@@ -194,10 +227,93 @@ mod tests {
         let r = increments(&s(&[0.20, 0.0]));
         assert_eq!(r[1].inc, Some(0.0));
         assert!(r[1].reset);
-        // At the threshold itself it is not near zero: plain (negative) difference, not a reset.
+        // At the threshold itself it is not near zero: not a reset, the drop is ignored (no rain, never negative).
         let r = increments(&s(&[1.00, RESET_NEAR_ZERO_IN]));
         assert!(!r[1].reset);
-        assert_eq!(r[1].inc, Some(round3(RESET_NEAR_ZERO_IN - 1.0)));
+        assert_eq!(r[1].inc, Some(0.0));
+    }
+
+    /// The first half hour of the real station: one tip reported, retracted, then reported again.
+    const REAL_FIRST_HALF_HOUR: [f64; 10] = [
+        0.051, 0.051, 0.059, 0.051, 0.051, 0.063, 0.063, 0.071, 0.071, 0.083,
+    ];
+
+    #[test]
+    fn real_retracted_tip_is_not_double_counted() {
+        let r = increments(&s(&REAL_FIRST_HALF_HOUR));
+        assert_eq!(
+            r.iter().map(|i| i.inc).collect::<Vec<_>>(),
+            [
+                None,
+                Some(0.0),
+                Some(0.008),
+                Some(0.0),
+                Some(0.0),
+                Some(0.004),
+                Some(0.0),
+                Some(0.008),
+                Some(0.0),
+                Some(0.012)
+            ]
+        );
+        assert!(!r.iter().any(|i| i.reset));
+        let total: f64 = r.iter().filter_map(|i| i.inc).sum();
+        assert_eq!(round3(total), 0.032);
+        assert_eq!(round3(total), round3(0.083 - 0.051));
+    }
+
+    #[test]
+    fn a_reset_after_a_peak_restarts_the_peak() {
+        // Peak 17.551, a dip (ignored), a reset to 0.00 (new value counts, peak restarts), then new rain.
+        let r = increments(&s(&[17.50, 17.551, 17.40, 17.551, 0.00, 0.02, 0.02, 0.07]));
+        assert_eq!(
+            r.iter().map(|i| i.inc).collect::<Vec<_>>(),
+            [
+                None,
+                Some(0.051),
+                Some(0.0),
+                Some(0.0),
+                Some(0.0),
+                Some(0.02),
+                Some(0.0),
+                Some(0.05)
+            ]
+        );
+        assert_eq!(r.iter().filter(|i| i.reset).count(), 1);
+        assert!(r[4].reset);
+        // After the reset the old peak no longer matters: 0.02 -> 0.01 is a drop to near zero, a reset of its own.
+        let r = increments(&s(&[5.0, 0.02, 0.01]));
+        assert!(r[1].reset && r[2].reset);
+        assert_eq!(r[2].inc, Some(0.01));
+    }
+
+    #[test]
+    fn seeded_peak_from_before_the_window_ignores_a_dip_inside_it() {
+        // The window starts at the predecessor (0.051, after an earlier peak of 0.059); the dip to 0.051 is inside.
+        let rows = s(&[0.051, 0.051, 0.063, 0.063]);
+        let seeded = increments_seeded(Some(0.059), &rows);
+        assert_eq!(
+            seeded.iter().map(|i| i.inc).collect::<Vec<_>>(),
+            [None, Some(0.0), Some(0.004), Some(0.0)]
+        );
+        // Without the seed the predecessor's own value would be the peak and the 0.051 -> 0.059 climb would be
+        // counted again by an earlier window; with it the two windows agree with one pass over the whole series.
+        let whole = increments(&s(&[0.051, 0.059, 0.051, 0.051, 0.063, 0.063]));
+        let tail: Vec<_> = whole[3..].iter().map(|i| i.inc).collect();
+        let seeded_tail: Vec<_> = seeded[1..].iter().map(|i| i.inc).collect();
+        assert_eq!(tail, seeded_tail);
+        // No seed: same as `increments`.
+        assert_eq!(increments_seeded(None, &rows), increments(&rows));
+    }
+
+    #[test]
+    fn a_null_counter_leaves_the_peak_alone() {
+        let r = incs(&series(
+            &[Some(1.0), Some(1.2), None, Some(1.1), Some(1.3)],
+            5,
+        ));
+        // the reading after the gap has no usable predecessor; the peak (1.2) survives, so 1.3 is 0.1 above it
+        assert_eq!(r, [None, Some(0.2), None, None, Some(0.1)]);
     }
 
     #[test]

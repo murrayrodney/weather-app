@@ -15,8 +15,10 @@ use sqlx::PgPool;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+/// A frozen copy of the helena recordings (`fixtures/test/open-meteo/`), so re-recording the replay fixtures in
+/// `fixtures/open-meteo/` never changes these tests' dates or values.
 fn fixture(prefix: &str) -> Vec<u8> {
-    let dir = fixtures().join("open-meteo");
+    let dir = fixtures().join("test").join("open-meteo");
     let mut names: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
         .flatten()
@@ -149,8 +151,8 @@ async fn forecast_shape_units_and_requests(db: PgPool) {
     let d = &j["deterministic"];
     assert_eq!(d["model"], "gfs_seamless");
     assert_eq!(d["daily"].as_array().unwrap().len(), 16);
-    // The stub serves the recorded forecast unshifted, so its first day is the day it was recorded (25 Oct 2026).
-    assert_eq!(d["daily"][0]["date"], "2026-10-25");
+    // The stub serves the recorded forecast unshifted, so its first day is the day it was recorded (30 Oct 2026).
+    assert_eq!(d["daily"][0]["date"], "2026-10-30");
     let n = d["hourly"]["time"].as_array().unwrap().len();
     let hourly_keys = [
         "temperature_f",
@@ -176,9 +178,9 @@ async fn forecast_shape_units_and_requests(db: PgPool) {
     // The fixture as recorded: pressure in hPa, precipitation in inches.
     let raw: Value = serde_json::from_slice(&fixture("forecast__")).unwrap();
     let raw_h = &raw["hourly"];
-    // Pressure: hPa converted to inHg in the API, rounded to two places (1022.3 hPa is 30.19 inHg).
+    // Pressure: hPa converted to inHg in the API, rounded to two places (the first recorded hour is 30.01 inHg).
     let inhg = d["hourly"]["pressure_inhg"].as_array().unwrap();
-    assert_eq!(inhg[0].as_f64(), Some(30.19));
+    assert_eq!(inhg[0].as_f64(), Some(30.01));
     for (hpa, got) in raw_h["pressure_msl"].as_array().unwrap().iter().zip(inhg) {
         let want = (hpa.as_f64().unwrap() * 0.0295299830714 * 100.0).round() / 100.0;
         assert!((got.as_f64().unwrap() - want).abs() < 1e-9, "{hpa} hPa");
@@ -206,7 +208,7 @@ async fn forecast_shape_units_and_requests(db: PgPool) {
     for k in ["sunrise", "sunset"] {
         assert!(day0[k].as_str().unwrap().ends_with('Z'), "{k}");
     }
-    assert_eq!(day0["sunrise"], "2026-10-25T13:59:00Z", "07:59 MDT");
+    assert_eq!(day0["sunrise"], "2026-10-30T14:07:00Z", "08:07 at UTC-6");
     let e = &j["ensemble"];
     assert_eq!(
         (e["model"].as_str().unwrap(), e["members"].as_u64().unwrap()),
@@ -224,8 +226,8 @@ async fn forecast_shape_units_and_requests(db: PgPool) {
         e["hourly"]["precip_in"]["p10"][en - 1].is_null(),
         "the last precipitation hours are null, not an error"
     );
-    // The ensemble horizon ends with null steps for every member (the recorded hourly series ends before its last steps have
-    // member values), so the percentiles are null there too; the first step has values.
+    // The ensemble horizon ends with null steps for every member (the frozen copy has no member values from 6 Nov),
+    // so the percentiles are null there too; the first step has values.
     assert!(e["hourly"]["temperature_f"]["p10"][en - 1].is_null());
     assert!(e["hourly"]["temperature_f"]["p50"][0].is_number());
     // The ensemble total: each member is accumulated first, then percentiles are taken. Every member's total never
@@ -274,9 +276,9 @@ async fn forecast_shape_units_and_requests(db: PgPool) {
         "per-member {per_member} vs summed hourly medians {summed}"
     );
     let days = e["daily"].as_array().unwrap();
-    // A member-day needs every member's hours: the recording has missing member values from 6 Nov, so the complete days
-    // are 25 Oct to 5 Nov (12 days). The old 15-day recording had none missing.
-    assert_eq!(days.len(), 12, "complete member-days");
+    // A member-day needs every member's hours: the frozen copy has no member values from 6 Nov, so the complete days
+    // are 30 Oct to 4 Nov (6 local days; 5 Nov is cut at its end by the UTC-6 offset).
+    assert_eq!(days.len(), 6, "complete member-days");
     for day in days {
         for k in ["tmax_f", "tmin_f", "precip_in"] {
             let (a, b, c) = (
@@ -445,7 +447,7 @@ async fn hidden_stations_cost_no_upstream_call_and_no_location_parameters(db: Pg
             "{who}"
         );
         assert_eq!(
-            w.get(who, &changes(s, "from=2026-10-12&to=2026-10-14"))
+            w.get(who, &changes(s, "from=2026-10-22&to=2026-10-24"))
                 .await
                 .status,
             StatusCode::NOT_FOUND,
@@ -491,7 +493,7 @@ async fn the_call_budget_is_enforced(db: PgPool) {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert!(r.json()["ensemble"].is_null());
     let r = w
-        .get("owner", &changes(a, "from=2026-10-12&to=2026-10-14"))
+        .get("owner", &changes(a, "from=2026-10-22&to=2026-10-24"))
         .await;
     assert_eq!(
         (r.status.as_u16(), r.code().as_str()),
@@ -501,7 +503,7 @@ async fn the_call_budget_is_enforced(db: PgPool) {
     // Time refills the bucket.
     w.clock.advance(Cd::minutes(1));
     assert_eq!(
-        w.get("owner", &changes(a, "from=2026-10-12&to=2026-10-14"))
+        w.get("owner", &changes(a, "from=2026-10-22&to=2026-10-24"))
             .await
             .status,
         StatusCode::OK
@@ -513,7 +515,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     let stub = Stub::start().await;
     let (w, s) = world(db, &stub).await;
     let r = w
-        .get("owner", &changes(s, "from=2026-10-12&to=2026-10-14"))
+        .get("owner", &changes(s, "from=2026-10-22&to=2026-10-24"))
         .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     let j = r.json();
@@ -521,7 +523,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     assert_eq!(j["lead_days"], json!([0, 1, 2, 3, 4, 5, 6, 7]));
     let days = j["days"].as_array().unwrap();
     assert_eq!(days.len(), 3);
-    assert_eq!(days[0]["date"], "2026-10-12");
+    assert_eq!(days[0]["date"], "2026-10-22");
     for d in days {
         for k in ["precip_in", "prob_precip_max", "tmax_f", "tmin_f"] {
             assert_eq!(d[k].as_array().unwrap().len(), 8, "{k}");
@@ -535,8 +537,8 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
         .to_owned();
     assert!(
         q.contains("models=gfs_seamless")
-            && q.contains("start_date=2026-10-11")
-            && q.contains("end_date=2026-10-15"),
+            && q.contains("start_date=2026-10-21")
+            && q.contains("end_date=2026-10-25"),
         "{q}"
     );
     assert_eq!(q.matches("previous_day").count(), 21, "{q}");
@@ -551,7 +553,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     // Two hours of caching.
     w.clock.advance(Cd::minutes(119));
     assert_eq!(
-        w.get("owner", &changes(s, "from=2026-10-12&to=2026-10-14"))
+        w.get("owner", &changes(s, "from=2026-10-22&to=2026-10-24"))
             .await
             .status,
         StatusCode::OK
@@ -559,7 +561,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     assert_eq!(stub.hits("/previous").await, 1);
     w.clock.advance(Cd::minutes(2));
     assert_eq!(
-        w.get("owner", &changes(s, "from=2026-10-12&to=2026-10-14"))
+        w.get("owner", &changes(s, "from=2026-10-22&to=2026-10-24"))
             .await
             .status,
         StatusCode::OK
@@ -574,7 +576,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
         "from=2026-10-12",
         "to=2026-10-12",
         "from=bad&to=2026-10-12",
-        "from=2026-10-12&to=2026-10-14&x=1",
+        "from=2026-10-22&to=2026-10-24&x=1",
     ] {
         assert_eq!(
             w.get("owner", &changes(s, q)).await.status.as_u16(),
@@ -584,7 +586,7 @@ async fn forecast_changes_shape_validation_and_cache(db: PgPool) {
     }
     // The widest allowed window (14 days) works.
     assert_eq!(
-        w.get("owner", &changes(s, "from=2026-10-11&to=2026-10-24"))
+        w.get("owner", &changes(s, "from=2026-10-17&to=2026-10-30"))
             .await
             .status,
         StatusCode::OK
@@ -681,12 +683,12 @@ async fn one_user_cannot_drain_the_forecast_budget(db: PgPool) {
         let path = if i % 2 == 0 {
             fpath(s)
         } else {
-            changes(s, "from=2026-10-12&to=2026-10-14")
+            changes(s, "from=2026-10-22&to=2026-10-24")
         };
         assert_eq!(w.get("owner", &path).await.status, StatusCode::OK, "{i}");
     }
     let hits = stub.server.received_requests().await.unwrap().len();
-    for path in [fpath(s), changes(s, "from=2026-10-12&to=2026-10-14")] {
+    for path in [fpath(s), changes(s, "from=2026-10-22&to=2026-10-24")] {
         let r = w.get("owner", &path).await;
         assert_eq!(
             (r.status.as_u16(), r.code().as_str()),

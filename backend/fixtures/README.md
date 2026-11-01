@@ -33,7 +33,7 @@ replay is `Unauthorized`. Replay shifts all timestamps once at process start so 
 `:01` is generated; `:02` and `:03` are derived from it (temperatures shifted, rain counters scaled, timestamps kept)
 so each keeps its own counters. The base series contains, at a fixed offset from its start, one console counter
 **reset** (day 20, the total drops to zero and counts on), so the rollup exercises `rain_resets`. There are no injected
-glitches or jumps: the rain rules are plain differences plus reset to near zero.
+glitches or jumps: the rain rules are a high-water mark (a non-reset dip is ignored) plus reset to near zero.
 
 Regenerate everything (deterministic):
 
@@ -70,5 +70,11 @@ station and shifts every time by whole days so the forecast starts on the statio
 a latitude/longitude with more than one decimal under `awn/`; an `acis/` coordinate that is not the coordinate of a
 seed reference station (StnData files) or a station entry of the file itself (`stnmeta__*`, public stations only);
 fewer than 12 complete years in an ACIS file; fewer than 60 days of history per MAC; a total size above 25 MB. Open-Meteo
-fixtures belong to the API crate; the lint checks `open-meteo/` (coordinates within 0.25 degrees of a seed city
-centre) when that directory exists.
+fixtures belong to the API crate; the lint checks `open-meteo/` and `test/open-meteo/` (coordinates within 0.25
+degrees of a seed city centre) when those directories exist.
+
+`test/open-meteo/` holds a frozen copy of the helena forecast, ensemble and previous-runs recordings (taken from commit
+5caf296, which has the sunrise, sunset, weather code and snow fields). The API's forecast tests read only this copy, so
+re-recording the replay fixtures in `open-meteo/` never changes their dates or values. Do not re-record it. One edit:
+in the ensemble file every member's temperature and precipitation are set to null from 2026-11-06T00:00 on, to keep the
+tests for a series that ends with missing member values.

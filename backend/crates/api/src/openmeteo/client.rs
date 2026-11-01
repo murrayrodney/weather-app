@@ -413,7 +413,9 @@ mod tests {
             };
             d.insert(name.into(), v);
         }
-        json!({ "utc_offset_seconds": -21600, "hourly": h, "daily": d }).to_string().into_bytes()
+        json!({ "utc_offset_seconds": -21600, "hourly": h, "daily": d })
+            .to_string()
+            .into_bytes()
     }
 
     fn denver() -> Tz {

@@ -626,12 +626,12 @@ async fn housekeeping_deletes_old_job_runs_once_a_day_after_0300_utc(db: PgPool)
         .clock_at(Utc.with_ymd_and_hms(2026, 10, 17, 4, 7, 0).unwrap())
         .build()
         .await;
-    sqlx::query("INSERT INTO app.job_runs (job, status, started_at, finished_at) VALUES ('awn_ingest','success', now() - interval '100 days', now() - interval '100 days'), ('awn_ingest','success', now() - interval '10 days', now() - interval '10 days')")
+    sqlx::query("INSERT INTO app.job_runs (job, status, started_at, finished_at) VALUES ('awn_ingest','success', TIMESTAMPTZ '2026-10-17 04:07+00' - interval '100 days', TIMESTAMPTZ '2026-10-17 04:07+00' - interval '100 days'), ('awn_ingest','success', TIMESTAMPTZ '2026-10-17 04:07+00' - interval '10 days', TIMESTAMPTZ '2026-10-17 04:07+00' - interval '10 days')")
         .execute(&w.db).await.unwrap();
     let first = run(&w, JobName::DailyRollup, None, JobFlags::default()).await;
     assert_eq!(detail(&first)["job_runs_deleted"], 1, "{}", detail(&first));
     assert_eq!(detail(&first)["housekeeping_done_on"], "2026-10-17");
-    sqlx::query("INSERT INTO app.job_runs (job, status, started_at, finished_at) VALUES ('awn_ingest','success', now() - interval '120 days', now() - interval '120 days')").execute(&w.db).await.unwrap();
+    sqlx::query("INSERT INTO app.job_runs (job, status, started_at, finished_at) VALUES ('awn_ingest','success', TIMESTAMPTZ '2026-10-17 04:07+00' - interval '120 days', TIMESTAMPTZ '2026-10-17 04:07+00' - interval '120 days')").execute(&w.db).await.unwrap();
     let second = run(&w, JobName::DailyRollup, None, JobFlags::default()).await;
     assert_eq!(detail(&second)["job_runs_deleted"], 0, "already done today");
     assert!(detail(&second)["housekeeping_done_on"].is_null());
@@ -641,7 +641,7 @@ async fn housekeeping_deletes_old_job_runs_once_a_day_after_0300_utc(db: PgPool)
     let early = run(&w, JobName::DailyRollup, None, JobFlags::default()).await;
     assert!(detail(&early)["housekeeping_done_on"].is_null());
     assert_eq!(
-        w.count("SELECT count(*) FROM app.job_runs WHERE started_at < now() - interval '90 days'")
+        w.count("SELECT count(*) FROM app.job_runs WHERE started_at < TIMESTAMPTZ '2026-10-18 02:07+00' - interval '90 days'")
             .await,
         1
     );

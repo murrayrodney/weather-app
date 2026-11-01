@@ -398,3 +398,124 @@ async fn finished_runs_leave_the_run_id_list(db: PgPool) {
     );
     w.close().await;
 }
+
+/// The first half hour of the real station: one tip reported, retracted, then reported again.
+const RETRACTED_TIP: [f32; 10] = [
+    0.051, 0.051, 0.059, 0.051, 0.051, 0.063, 0.063, 0.071, 0.071, 0.083,
+];
+
+#[sqlx::test(migrations = false)]
+async fn a_non_reset_dip_does_not_fail_the_rollup_and_the_day_total_is_the_net_rise(db: PgPool) {
+    let t0 = Utc.with_ymd_and_hms(2026, 6, 2, 2, 0, 0).unwrap();
+    let w = Builder::new(db).clock_at(t0 + Dur::days(10)).build().await;
+    let st = station(&w).await;
+    let rows: Vec<MappedRow> = RETRACTED_TIP
+        .iter()
+        .enumerate()
+        .map(|(i, v)| reading(t0 + Dur::minutes(5 * i as i64), *v))
+        .collect();
+    write_page(&w.env.pool, st, -420, rows, false)
+        .await
+        .unwrap();
+    let out = run(&w, JobName::DailyRollup, None).await;
+    // The CHECK (rain_inc_in >= 0) never trips on the dip.
+    assert_eq!(status(&out), RunStatus::Success, "{out:?}");
+    let (rain, resets): (Option<f64>, i16) = sqlx::query_as(
+        "SELECT rain_in::float8, rain_resets FROM app.daily_rollups WHERE station_id = $1",
+    )
+    .bind(st)
+    .fetch_one(&w.db)
+    .await
+    .unwrap();
+    assert_eq!(resets, 0);
+    assert!((rain.unwrap() - 0.032).abs() < 1e-9, "{rain:?}");
+    let incs: Vec<Option<f64>> = sqlx::query_scalar(
+        "SELECT rain_inc_in::float8 FROM app.observations WHERE station_id = $1 ORDER BY ts_utc",
+    )
+    .bind(st)
+    .fetch_all(&w.db)
+    .await
+    .unwrap();
+    let want = [
+        None,
+        Some(0.0),
+        Some(0.008),
+        Some(0.0),
+        Some(0.0),
+        Some(0.004),
+        Some(0.0),
+        Some(0.008),
+        Some(0.0),
+        Some(0.012),
+    ];
+    assert_eq!(incs.len(), want.len());
+    for (g, w) in incs.iter().zip(want) {
+        match (g, w) {
+            (None, None) => {}
+            (Some(g), Some(w)) => assert!((g - w).abs() < 1e-9, "{incs:?}"),
+            _ => panic!("{incs:?}"),
+        }
+    }
+    w.close().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_peak_set_before_a_month_seeds_the_month_so_a_dip_inside_it_is_ignored(db: PgPool) {
+    // May ends with the counter at its peak 0.059 and then a dip to 0.051 (the predecessor row of June). June starts
+    // at 0.051 and climbs to 0.063: only the 0.004 above the old peak is rain, not the 0.012 above the predecessor.
+    let boundary = Utc.with_ymd_and_hms(2026, 6, 1, 7, 0, 0).unwrap();
+    let w = Builder::new(db)
+        .clock_at(boundary + Dur::days(10))
+        .build()
+        .await;
+    let st = station(&w).await;
+    let vals: [(i64, f32); 6] = [
+        (-3, 0.051),
+        (-2, 0.059),
+        (-1, 0.051),
+        (0, 0.051),
+        (1, 0.063),
+        (2, 0.063),
+    ];
+    let rows: Vec<MappedRow> = vals
+        .iter()
+        .map(|(k, v)| reading(boundary + Dur::minutes(5 * k), *v))
+        .collect();
+    write_page(&w.env.pool, st, -420, rows, false)
+        .await
+        .unwrap();
+    // Process June alone: its predecessor is the dipped May row and the peak comes from the seed query.
+    sqlx::query("DELETE FROM app.rollup_dirty_days")
+        .execute(&w.db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO app.rollup_dirty_days VALUES ($1, '2026-06-01')")
+        .bind(st)
+        .execute(&w.db)
+        .await
+        .unwrap();
+    let out = run(&w, JobName::DailyRollup, None).await;
+    assert_eq!(status(&out), RunStatus::Success, "{out:?}");
+    let june: Vec<Option<f64>> = sqlx::query_scalar(
+        "SELECT rain_inc_in::float8 FROM app.observations WHERE station_id = $1 AND ts_utc >= $2 ORDER BY ts_utc",
+    )
+    .bind(st)
+    .bind(boundary)
+    .fetch_all(&w.db)
+    .await
+    .unwrap();
+    let june: Vec<f64> = june.into_iter().map(|i| i.unwrap()).collect();
+    assert_eq!(june.len(), 3);
+    for (g, w) in june.iter().zip([0.0, 0.004, 0.0]) {
+        assert!((g - w).abs() < 1e-9, "{june:?}");
+    }
+    let rain: Option<f64> = sqlx::query_scalar(
+        "SELECT rain_in::float8 FROM app.daily_rollups WHERE station_id = $1 AND local_date = '2026-06-01'",
+    )
+    .bind(st)
+    .fetch_one(&w.db)
+    .await
+    .unwrap();
+    assert!((rain.unwrap() - 0.004).abs() < 1e-9, "{rain:?}");
+    w.close().await;
+}

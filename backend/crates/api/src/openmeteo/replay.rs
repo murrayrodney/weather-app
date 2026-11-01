@@ -91,7 +91,11 @@ fn local_midnight(day: NaiveDate, loc: &ViewableStation) -> Result<DateTime<Utc>
 
 /// The elapsed shift that puts the first hour of a recorded series at local midnight of `day`. The recorded series starts
 /// at local midnight of its own first day, and the hourly series are regular, so one constant shift moves all of it.
-fn shift_to_midnight(times: &[DateTime<Utc>], day: NaiveDate, loc: &ViewableStation) -> Result<Duration, OmError> {
+fn shift_to_midnight(
+    times: &[DateTime<Utc>],
+    day: NaiveDate,
+    loc: &ViewableStation,
+) -> Result<Duration, OmError> {
     let first = *times.first().ok_or(OmError::Unavailable)?;
     Ok(local_midnight(day, loc)? - first)
 }
@@ -140,7 +144,7 @@ impl OpenMeteoApi for ReplayOpenMeteo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Timelike, TimeZone};
+    use chrono::{TimeZone, Timelike};
     use chrono_tz::America::Denver;
     use famweather_core::clock::FixedClock;
 
@@ -165,7 +169,10 @@ mod tests {
         let loc = station();
         let r = replay_at(Utc.with_ymd_and_hms(2026, 10, 30, 18, 0, 0).unwrap());
         let f = r.forecast(&loc).await.unwrap();
-        assert_eq!(f.times[0], Utc.with_ymd_and_hms(2026, 10, 30, 6, 0, 0).unwrap());
+        assert_eq!(
+            f.times[0],
+            Utc.with_ymd_and_hms(2026, 10, 30, 6, 0, 0).unwrap()
+        );
         assert_hourly(&f.times);
     }
 
@@ -180,11 +187,18 @@ mod tests {
         let f = r.forecast(&loc).await.unwrap();
         assert_eq!(f.times[0], midnight);
         assert_eq!(f.times[0].with_timezone(&Denver).hour(), 0);
-        assert_eq!(f.daily[0].date, NaiveDate::from_ymd_opt(2026, 11, 3).unwrap());
+        assert_eq!(
+            f.daily[0].date,
+            NaiveDate::from_ymd_opt(2026, 11, 3).unwrap()
+        );
         assert_hourly(&f.times);
         // sunrise moves with the same elapsed shift as the hourly series, so it lands on the replay date
         let sunrise = f.daily[0].sunrise.unwrap().with_timezone(&Denver);
-        assert_eq!(sunrise.date_naive(), NaiveDate::from_ymd_opt(2026, 11, 3).unwrap(), "sunrise {sunrise}");
+        assert_eq!(
+            sunrise.date_naive(),
+            NaiveDate::from_ymd_opt(2026, 11, 3).unwrap(),
+            "sunrise {sunrise}"
+        );
 
         let e = r.ensemble(&loc).await.unwrap();
         assert_eq!(e.times[0], midnight);
@@ -213,7 +227,10 @@ mod tests {
         let r = replay_at(Utc.with_ymd_and_hms(2026, 10, 30, 18, 0, 0).unwrap());
         let from = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
         let p = r.previous_runs(&loc, from, from).await.unwrap();
-        assert_eq!(p.times[0], Utc.with_ymd_and_hms(2026, 10, 28, 6, 0, 0).unwrap());
+        assert_eq!(
+            p.times[0],
+            Utc.with_ymd_and_hms(2026, 10, 28, 6, 0, 0).unwrap()
+        );
         assert_hourly(&p.times);
     }
 }

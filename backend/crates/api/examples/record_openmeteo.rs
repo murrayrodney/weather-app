@@ -32,7 +32,19 @@ async fn get(client: &reqwest::Client, base: &str, params: &[(&str, String)]) ->
     if !r.status().is_success() {
         bail!("upstream status {}", r.status());
     }
-    Ok(r.bytes().await?.to_vec())
+    let body = r.bytes().await?.to_vec();
+    // Open-Meteo can answer HTTP 200 with an error body (for example a streaming timeout): never save that.
+    let v: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| anyhow!("upstream body is not valid JSON: {e}"))?;
+    if v.get("error").is_some() {
+        bail!(
+            "upstream returned an error body: {}",
+            v.get("reason")
+                .and_then(|r| r.as_str())
+                .unwrap_or("unknown")
+        );
+    }
+    Ok(body)
 }
 
 #[tokio::main]

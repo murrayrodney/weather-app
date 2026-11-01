@@ -9,7 +9,10 @@ use std::time::Duration as StdDuration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
-use famweather_core::rain::{self, choose_counter, increments, Counters, Inc, RainRow};
+use famweather_core::rain::consts::RESET_NEAR_ZERO_IN;
+use famweather_core::rain::{
+    self, choose_counter, increments_seeded, Counter, Counters, Inc, RainRow,
+};
 use famweather_core::time::standard_day_bounds;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -163,7 +166,8 @@ pub fn compute_day(
 // Month series cache
 
 struct MonthSeries {
-    /// The one predecessor row (if any, needed for the first difference), then the month's rows.
+    /// The one predecessor row (if any), then the month's rows. The predecessor supplies the previous reading for the
+    /// first increment and, with `seed_peak`, the rain peak carried into the month.
     rows: Vec<SeriesRow>,
     /// Increments over `rows` with the counter chosen from the month's own rows (`None`: no usable counter).
     incs: Option<Vec<Inc>>,
@@ -219,7 +223,43 @@ fn series_row(r: &sqlx::postgres::PgRow) -> Result<SeriesRow, sqlx::Error> {
     })
 }
 
-const SERIES_COLS: &str = "ts_utc, temp_f, rain_total_in::float8 AS total, rain_yearly_in::float8 AS yearly, rain_daily_in::float8 AS daily";
+/// How far before the predecessor the peak seed looks when no near-zero reading (a reset or a fresh counter) is
+/// found. Bounds the scan; the counter is non-decreasing apart from ignored dips, so its peak is almost always in
+/// the most recent readings.
+const SEED_MAX_LOOKBACK_DAYS: i64 = 366;
+
+/// The high-water mark of `counter` before a window: the maximum value from the last reading below
+/// `RESET_NEAR_ZERO_IN` (the last reset, or the counter's start; the peak restarts there) up to and including the
+/// predecessor reading at `pred_ts`, looking back at most [`SEED_MAX_LOOKBACK_DAYS`]. One bounded index range scan
+/// per month load. `None` when there is no such reading with a value.
+async fn seed_peak(
+    conn: &mut PgConnection,
+    station: Uuid,
+    counter: Counter,
+    pred_ts: DateTime<Utc>,
+) -> Result<Option<f64>, sqlx::Error> {
+    // Column names come from the closed `Counter` enum, never from input.
+    let col = match counter {
+        Counter::Total => "rain_total_in",
+        Counter::Yearly => "rain_yearly_in",
+        Counter::Daily => "rain_daily_in",
+    };
+    let sql = format!(
+        "SELECT max({col})::float8 FROM app.observations WHERE station_id = $1 AND ts_utc <= $2 \
+           AND ts_utc >= GREATEST($2 - make_interval(days => $4), COALESCE( \
+             (SELECT max(ts_utc) FROM app.observations WHERE station_id = $1 AND ts_utc <= $2 \
+                AND ts_utc >= $2 - make_interval(days => $4) AND {col} < $3::float8), '-infinity'::timestamptz))"
+    );
+    sqlx::query_scalar(&sql)
+        .bind(station)
+        .bind(pred_ts)
+        .bind(RESET_NEAR_ZERO_IN)
+        .bind(SEED_MAX_LOOKBACK_DAYS as i32)
+        .fetch_one(&mut *conn)
+        .await
+}
+
+const SERIES_COLS: &str ="ts_utc, temp_f, rain_total_in::float8 AS total, rain_yearly_in::float8 AS yearly, rain_daily_in::float8 AS daily";
 
 async fn load_month(
     conn: &mut PgConnection,
@@ -256,6 +296,11 @@ async fn load_month(
 
     let counters: Vec<Counters> = month.iter().map(|r| r.counters).collect();
     let counter = choose_counter(&counters);
+    // The peak before the month: the high-water mark of the chosen counter up to and including the predecessor.
+    let seed = match (counter, pred.first()) {
+        (Some(c), Some(p)) => seed_peak(&mut *conn, key.station, c, p.ts).await?,
+        _ => None,
+    };
     let mut rows = Vec::with_capacity(month.len() + 1);
     rows.extend(pred);
     rows.extend(month);
@@ -267,7 +312,7 @@ async fn load_month(
                 counter: r.counters.get(c),
             })
             .collect();
-        increments(&rr)
+        increments_seeded(seed, &rr)
     });
     Ok(MonthSeries {
         rows,
@@ -619,6 +664,7 @@ impl Job for DailyRollup {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use famweather_core::rain::increments;
 
     fn t0() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 2, 7, 0, 0).unwrap() // MST midnight

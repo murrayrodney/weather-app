@@ -470,7 +470,7 @@ Final names (this is the authoritative list; 03's 7.1 must match). All sensor co
 | `battout` | `battery_out` | smallint |
 | (derived by `daily_rollup`, not by ingest) | `rain_inc_in` | numeric(6,3) |
 
-`rain_inc_in` is the per-interval rain increment: the plain difference to the previous reading, or the new value after a reset to near zero (F6; 03 section 7.3). It is recomputed by the rollup (so a late row fixes its neighbours) and `daily_rollups.rain_in = sum(rain_inc_in)`. Ingest upserts must not touch it. Not stored: `24hourrainin`, `tz`, `macAddress`, extra sensors, `battin`, raw JSON (C4). Adding a sensor is a migration plus a row in 03's mapping table.
+`rain_inc_in` is the per-interval rain increment: the rise above the running peak of the counter since the last reset (never negative: a non-reset drop gives 0), or the new value after a reset to near zero (F6; 03 section 7.3). It is recomputed by the rollup (so a late row fixes its neighbours) and `daily_rollups.rain_in = sum(rain_inc_in)`. Ingest upserts must not touch it. Not stored: `24hourrainin`, `tz`, `macAddress`, extra sensors, `battin`, raw JSON (C4). Adding a sensor is a migration plus a row in 03's mapping table.
 
 ```sql
 CREATE TABLE app.observations (
