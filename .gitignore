@@ -21,4 +21,40 @@ rustc-ice-*.txt
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+.idea/
+
+# Local secrets and state (05-local-dev)
+.env
+.local/
+
+# Web build and test output (01-web, 05-local-dev)
+web/build/
+web/node_modules/
+web/tests/.auth/
+web/test-results/
+web/playwright-report/
+web/.svelte-kit/
+web/.vite/
+web/coverage/
+web/.env
+web/.env.*
+!web/.env.test
+*.tsbuildinfo
+playwright/.cache/
+blob-report/
+coverage/
+
+# Local Claude Code state (agent definitions in .claude/agents/ ARE committed)
+.claude/settings.local.json
+.claude/worktrees/
+.claude/scratch/
+
+# OS and editor junk
+.DS_Store
+*.swp
+.vscode/
+
+# Local env variants (only .env.example is committed)
+.env.*
+!.env.example
+!.env.test

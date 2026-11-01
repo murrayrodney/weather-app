@@ -1,0 +1,42 @@
+{
+  "info": {
+    "coords": {
+      "coords": {
+        "lat": 40.4,
+        "lon": -105.1
+      },
+      "elevation": 5000.0
+    },
+    "name": "Demo Station Loveland"
+  },
+  "lastData": {
+    "baromabsin": 25.07,
+    "baromrelin": 29.87,
+    "battin": 1,
+    "battout": 1,
+    "dailyrainin": 0.0,
+    "date": "2026-10-15T12:00:00.000Z",
+    "dateutc": 1792065600000,
+    "dewPoint": 35.3,
+    "eventrainin": 0.0,
+    "feelsLike": 38.8,
+    "hourlyrainin": 0.0,
+    "humidity": 79,
+    "humidityin": 42,
+    "lastRain": "2026-10-14T03:10:00.000Z",
+    "maxdailygust": 11.6,
+    "monthlyrainin": 1.35,
+    "solarradiation": 0.0,
+    "tempf": 39.5,
+    "tempinf": 68.9,
+    "totalrainin": 4.97,
+    "tz": "America/Denver",
+    "uv": 0,
+    "weeklyrainin": 0.11,
+    "winddir": 161,
+    "windgustmph": 8.6,
+    "windspeedmph": 7.2,
+    "yearlyrainin": 10.0
+  },
+  "macAddress": "AA:BB:CC:00:00:03"
+}

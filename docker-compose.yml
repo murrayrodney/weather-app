@@ -1,0 +1,234 @@
+name: weather
+
+# db, auth, auth-access, migrate, poller, api, caddy, the admin tool container and the web build container.
+# The shared image is built by `api` (05 section 5.1); the other backend services use the same tag.
+
+x-backend: &backend
+  image: weather-backend:local
+  pull_policy: never
+  restart: "no"
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy .env.example to .env}
+      POSTGRES_DB: postgres
+      # unix-socket trust for in-container admin (exec -u postgres); every TCP login uses SCRAM
+      POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"
+      # Verifiers only: the db container never sees the role plaintext passwords.
+      SUPABASE_AUTH_ADMIN_PASSWORD_VERIFIER: ${SUPABASE_AUTH_ADMIN_PASSWORD_VERIFIER:?}
+      APP_MIGRATOR_PASSWORD_VERIFIER: ${APP_MIGRATOR_PASSWORD_VERIFIER:?}
+      APP_API_PASSWORD_VERIFIER: ${APP_API_PASSWORD_VERIFIER:?}
+      APP_POLLER_PASSWORD_VERIFIER: ${APP_POLLER_PASSWORD_VERIFIER:?}
+      APP_BACKUP_PASSWORD_VERIFIER: ${APP_BACKUP_PASSWORD_VERIFIER:?}
+      APP_CI_CHECK_PASSWORD_VERIFIER: ${APP_CI_CHECK_PASSWORD_VERIFIER:?}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./ops/db/init:/docker-entrypoint-initdb.d:ro
+      - ./ops:/ops:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      # -h 127.0.0.1: during first-run init the temporary server listens on the unix socket only,
+      # so a socket-based pg_isready would report ready too early.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  auth:
+    image: supabase/auth:v2.197.0
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+      API_EXTERNAL_URL: http://localhost:8000
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${SUPABASE_AUTH_ADMIN_PASSWORD}@db:5432/postgres
+      DB_NAMESPACE: auth
+      GOTRUE_JWT_SECRET: ${JWT_HS256_SECRET:?}
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_ISSUER: http://localhost:8000/auth/v1
+      GOTRUE_SITE_URL: http://localhost:8000
+      GOTRUE_URI_ALLOW_LIST: ""        # empty on purpose: no flow uses a redirect (proposals/05)
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_MAILER_OTP_EXP: "3600"                                      # lifetime of the set-password link
+      GOTRUE_PASSWORD_MIN_LENGTH: "12"
+      GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_REAUTHENTICATION: "false"  # no emailed nonce to change a password
+      GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_CURRENT_PASSWORD: "false"  # v2.197.0: does not block a set-password-link session; it blocks changes from a normal password session (400 current_password_required). The 04 compose test password_change_without_current_password fails if it is on
+      GOTRUE_RATE_LIMIT_HEADER: X-Forwarded-For
+      # No GOTRUE_SMTP_* and no GOTRUE_MAILER_URLPATHS_*: nothing is emailed (proposals/05).
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:9999/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  auth-access:
+    # One-shot: same file and same role (postgres) as production. Needs GoTrue's tables to exist.
+    image: postgres:17
+    depends_on:
+      auth:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./ops/db/bootstrap:/bootstrap:ro
+    command: ["psql", "-X", "-v", "ON_ERROR_STOP=1", "-h", "db", "-U", "postgres", "-d", "postgres", "-f", "/bootstrap/auth_access.sql"]
+    restart: "no"
+
+  migrate:
+    <<: *backend
+    depends_on:
+      auth-access:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgres://app_migrator:${APP_MIGRATOR_PASSWORD}@db:5432/postgres?sslmode=disable
+      RUST_LOG: ${RUST_LOG:-info}
+    command: ["admin", "migrate"]
+
+  api:
+    <<: *backend
+    build:
+      context: ./backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      auth:
+        condition: service_healthy
+    environment:
+      APP_ENV: local
+      API_BIND_ADDR: 0.0.0.0:8080
+      DATABASE_URL: postgres://app_api:${APP_API_PASSWORD}@db:5432/postgres?sslmode=disable
+      SUPABASE_URL: http://localhost:8000 # the token issuer is http://localhost:8000/auth/v1 (GoTrue's API_EXTERNAL_URL)
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET:?}
+      AWN_APPLICATION_KEY: ${AWN_APPLICATION_KEY:-REPLACE_WITH_DEV_APPLICATION_KEY}
+      AWN_MODE: ${AWN_MODE:-replay}
+      FIXTURES_DIR: /fixtures
+      # The API holds the public key only (S5): no private key, no service key.
+      CREDENTIALS_PUBLIC_KEY: ${CREDENTIALS_PUBLIC_KEY:?}
+      CREDENTIALS_KEY_VERSION: ${CREDENTIALS_KEY_VERSION:-1}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./backend/fixtures:/fixtures:ro
+    command: ["api"]
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "api", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  caddy:
+    image: caddy:2
+    # Imports the generated, committed ops/caddy/security-headers.caddy (01's headers.mjs) and refuses to start without it
+    # (fail closed, 05 section 5.3).
+    depends_on:
+      api:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./ops/caddy/security-headers.caddy:/etc/caddy/security-headers.caddy:ro
+      - ./web:/srv/webroot:ro
+      - caddy_data:/data
+    ports:
+      - "127.0.0.1:8000:80"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  poller:
+    <<: *backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgres://app_poller:${APP_POLLER_PASSWORD}@db:5432/postgres?sslmode=disable
+      AWN_APPLICATION_KEY: ${AWN_APPLICATION_KEY:-REPLACE_WITH_DEV_APPLICATION_KEY}
+      AWN_MODE: ${AWN_MODE:-replay}
+      FIXTURES_DIR: /fixtures
+      # The poller is the only service that holds the private key (S5); it has no service key.
+      CREDENTIALS_PRIVATE_KEY: ${CREDENTIALS_PRIVATE_KEY:?}
+      CREDENTIALS_KEY_VERSION: ${CREDENTIALS_KEY_VERSION:-1}
+      # Off by default (D6): the process logs one line and only touches its heartbeat file.
+      # `make poller-replay` turns the scheduler on with the recorded fixtures; `poller run-job` works either way.
+      POLLER_ENABLED: ${POLLER_ENABLED:-false}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./backend/fixtures:/fixtures:ro
+    command: ["poller"]
+    # Jobs get 25 s to finish their unit after SIGTERM (03 4.5); Compose's default 10 s would SIGKILL them first.
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "poller", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # ---- on demand (profiles) ----
+
+  admin:
+    <<: *backend
+    profiles: ["tools"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgres://app_migrator:${APP_MIGRATOR_PASSWORD}@db:5432/postgres?sslmode=disable
+      # 05 uses http://caddy (route /auth/v1 to GoTrue). Caddy lands with the web step; until then the admin tool talks to
+      # GoTrue directly (host `auth` is allowed locally and selects the root admin API path, 04 section 10.1).
+      SUPABASE_URL: http://auth:9999
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?}
+      SITE_URL: ${SITE_URL:-http://localhost:8000} # origin printed in set-password links
+      LOCAL_DEMO_PASSWORD: ${LOCAL_DEMO_PASSWORD:?} # seed-dev only (04 12.1)
+      CREDENTIALS_PUBLIC_KEY: ${CREDENTIALS_PUBLIC_KEY:?}
+      CREDENTIALS_KEY_VERSION: ${CREDENTIALS_KEY_VERSION:-1}
+      AWN_APPLICATION_KEY: ${AWN_APPLICATION_KEY:-REPLACE_WITH_DEV_APPLICATION_KEY}
+      AWN_MODE: ${AWN_MODE:-replay}
+      FIXTURES_DIR: /fixtures
+      SEED_DIR: /seed
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./backend/fixtures:/fixtures:ro
+      - ./ops/db/seed:/seed:ro
+    command: ["admin", "--help"]
+    # No tty/stdin_open here: scripted runs use `run -T`; only `make add-station` runs interactively.
+
+  web:
+    # One-shot build of web/build (05 section 4.3); Caddy mounts ./web read-only. Only the two PUBLIC_* values are passed.
+    profiles: ["tools"]
+    image: ${WEB_NODE_IMAGE:-node:26-bookworm-slim}
+    working_dir: /work/web
+    environment:
+      PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL:-http://localhost:8000}
+      PUBLIC_SUPABASE_ANON_KEY: ${PUBLIC_SUPABASE_ANON_KEY:?}
+    volumes:
+      - ./web:/work/web
+      - web_node_modules:/work/web/node_modules
+    command: ["sh", "-c", "npm ci && npm run build"]
+
+volumes:
+  db_data:
+  caddy_data:
+  web_node_modules:

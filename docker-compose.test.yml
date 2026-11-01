@@ -1,0 +1,76 @@
+# Test project only. Used as:
+#   docker compose -p famweather-test -f docker-compose.yml -f docker-compose.test.yml ...   (Makefile macro T)
+# Requires Compose >= 2.24 for !reset / !override. The test project shares no containers, volumes, networks or host ports
+# with the working stack. Every container that mounts the repo masks /work/.env with /dev/null.
+services:
+  db:
+    ports: !reset []
+    volumes: !override
+      - ./ops/db/init:/docker-entrypoint-initdb.d:ro
+      - ./ops:/ops:ro
+      - .:/work:ro
+      - /dev/null:/work/.env:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+  caddy:
+    ports: !reset []
+
+  web:
+    # test-web: sources are copied into a tmpfs at /work/web and built there (never the host's web/build, no root-owned
+    # files on the host). ops/caddy is visible so headers:check finds ../ops/caddy. The two PUBLIC_* values come from the
+    # base service; the production-context checks are not enabled here.
+    volumes: !override
+      - ./web:/src/web:ro
+      - ./ops/caddy:/work/ops/caddy:ro
+      - ./backend/demo-fingerprints.txt:/work/backend/demo-fingerprints.txt:ro
+      - /dev/null:/work/.env:ro
+    tmpfs:
+      - /work/web:size=3g,exec # tmpfs is noexec by default; npm/vite need exec
+    working_dir: /work/web
+
+  test-backend:
+    image: rust:1.95-bookworm
+    working_dir: /work/backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      auth:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres?sslmode=disable # superuser; #[sqlx::test] reads it
+      TEST_SUPERUSER_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres?sslmode=disable
+      TEST_MIGRATOR_DATABASE_URL: postgres://app_migrator:${APP_MIGRATOR_PASSWORD}@db:5432/postgres?sslmode=disable
+      TEST_JWT_HS256_SECRET: ${JWT_HS256_SECRET}
+      SUPABASE_URL: http://auth:9999 # tests mint a service-role JWT from the HS256 secret; set-password tests call GoTrue directly here (/verify, /user, /token)
+      SITE_URL: http://localhost:8000 # origin printed in set-password links
+      FIXTURES_DIR: /work/backend/fixtures
+      SEED_DIR: /work/ops/db/seed # admin seed_dev_idempotent reads seed.toml from here (the repo is mounted at /work below)
+      OPS_DIR: /work/ops/db
+      CANARY_TOKENS_FILE: /work/.local/canary-tokens # minted set-password tokens, grepped in the container logs by check-secret-logs.sh
+      LOCAL_DEMO_PASSWORD: ${LOCAL_DEMO_PASSWORD:?} # seed-dev only (04 12.1)
+      CREDENTIALS_PUBLIC_KEY: ${CREDENTIALS_PUBLIC_KEY:?}
+      CREDENTIALS_PRIVATE_KEY: ${CREDENTIALS_PRIVATE_KEY:?}
+      CREDENTIALS_KEY_VERSION: ${CREDENTIALS_KEY_VERSION:-1}
+      CARGO_TARGET_DIR: /cargo-target
+    volumes:
+      - .:/work
+      - /dev/null:/work/.env:ro # mask the developer's .env
+      # CI sets CARGO_REGISTRY_SRC / CARGO_TARGET_SRC (06 11.2) so these two become bind mounts of directories that
+      # actions/cache saves between runs; unset (local development) they stay named volumes. Compose treats a source
+      # containing "/" as a bind mount.
+      - ${CARGO_REGISTRY_SRC:-cargo_registry}:/usr/local/cargo/registry
+      - ${CARGO_TARGET_SRC:-cargo_target}:/cargo-target
+    command:
+      - sh
+      - -ec
+      - |
+        FEAT=""; [ -d crates/api ] && FEAT="--features api/test-support"
+        EXCL=""; [ -d crates/admin ] && EXCL="--exclude admin"
+        cargo test --workspace $$EXCL $$FEAT
+        if [ -d crates/api ] && cargo tree -p api -e normal,build,features -f '{p} {f}' | grep -E 'decrypt|test-support|testdb'; then echo "api enables a forbidden core feature"; exit 1; fi
+        if [ -d crates/admin ]; then cargo test -p admin --features compose-tests -- --test-threads=1; fi
+        # No `cargo sqlx prepare --check`: every query is a runtime sqlx::query with bind parameters (no macros, no .sqlx/).
+
+volumes:
+  cargo_registry:
+  cargo_target:

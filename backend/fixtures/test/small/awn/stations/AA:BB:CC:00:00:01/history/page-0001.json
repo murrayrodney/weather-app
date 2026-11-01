@@ -1,0 +1,8 @@
+[
+  {"dateutc": 1780315200000, "tempf": 61.0, "humidity": 40, "totalrainin": 0.05, "dailyrainin": 0.05},
+  {"dateutc": 1780314900000, "tempf": 60.8, "humidity": 40, "totalrainin": 0.04, "dailyrainin": 0.04},
+  {"dateutc": 1780314600000, "tempf": 60.6, "humidity": 41, "totalrainin": 0.0, "dailyrainin": 0.0},
+  {"dateutc": 1780314300000, "tempf": 60.5, "humidity": 41, "totalrainin": 1.25, "dailyrainin": 0.0},
+  {"dateutc": 1780314000000, "tempf": 60.1, "humidity": 41, "totalrainin": 1.2, "dailyrainin": 0.0},
+  {"dateutc": 1780313700000, "tempf": 59.9, "humidity": 42, "totalrainin": 1.2, "dailyrainin": 0.0}
+]

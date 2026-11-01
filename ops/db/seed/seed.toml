@@ -1,0 +1,119 @@
+# Local demo data read by `admin seed-dev` (04 section 12.1). Fake or approximate throughout: no real MACs, addresses,
+# coordinates or airports are claimed. Names, ids and the stored key match 00-conventions "Fixtures" exactly.
+# Every user is created with LOCAL_DEMO_PASSWORD (.env.example), so e2e tests and people can sign in at once.
+
+# The AWN key stored (encrypted to the local CREDENTIALS_PUBLIC_KEY) for each station owner. Replay mode accepts it for
+# the seeded MACs only (backend/fixtures/awn/stations/<MAC>/). The connect-flow keys (fixture-valid-key, ...) are never stored.
+poller_key = "fixture-poller-key"
+
+# Reference ("baseline") stations. 03's ACIS fixtures are stored under these ids. Real ids: USW00024144 Helena,
+# USW00024022 Laramie, USW00094035 Northern Colorado Regional Airport (Loveland).
+[[reference_station]]
+id = "USW00099001"
+name = "Demo Helena Airport"
+lat = 46.6
+lon = -112.0
+elevation_ft = 3830
+timezone = "America/Denver"
+std_offset_minutes = -420
+
+[[reference_station]]
+id = "USW00099002"
+name = "Demo Laramie Airport"
+lat = 41.3
+lon = -105.7
+elevation_ft = 7280
+timezone = "America/Denver"
+std_offset_minutes = -420
+
+[[reference_station]]
+id = "USW00099003"
+name = "Demo Loveland Airport"
+lat = 40.4
+lon = -105.0
+elevation_ft = 5020
+timezone = "America/Denver"
+std_offset_minutes = -420
+
+# Users. Rodney, Alex and Sam are mutually approved (follow_all semantics, in this order). Pat is the stranger with no
+# follows, Dana carries the security-state follows below, Casey is the inactive user.
+[[user]]
+display_name = "Rodney"
+email = "rodney@example.test"
+admin = true
+follow_all = true
+
+[[user]]
+display_name = "Alex"
+email = "alex@example.test"
+follow_all = true
+
+[[user]]
+display_name = "Sam"
+email = "sam@example.test"
+follow_all = true
+
+[[user]]
+display_name = "Pat"
+email = "pat@example.test"
+
+[[user]]
+display_name = "Dana"
+email = "dana@example.test"
+
+[[user]]
+display_name = "Casey"
+email = "casey@example.test"
+inactive = true
+
+# Follow states for Dana (Pat has none). declined and revoked pass through realistic history (pending -> declined,
+# approved -> revoked).
+[[follow]]
+follower = "Dana"
+followee = "Alex"
+status = "pending"
+
+[[follow]]
+follower = "Dana"
+followee = "Sam"
+status = "declined"
+
+[[follow]]
+follower = "Dana"
+followee = "Rodney"
+status = "revoked"
+
+# Stations (skipped with --no-stations). One credential per owner. The MACs AA:BB:CC:00:01:01 and :02 (the connect-flow
+# devices) are deliberately not seeded.
+[[station]]
+mac = "AA:BB:CC:00:00:01"
+name = "Demo Station Helena"
+owner = "Rodney"
+lat = 46.6
+lon = -112.0
+elevation_ft = 3900
+timezone = "America/Denver"
+std_offset_minutes = -420
+reference_station = "USW00099001"
+
+[[station]]
+mac = "AA:BB:CC:00:00:02"
+name = "Demo Station Laramie"
+owner = "Alex"
+lat = 41.3
+lon = -105.6
+elevation_ft = 7200
+timezone = "America/Denver"
+std_offset_minutes = -420
+reference_station = "USW00099002"
+
+[[station]]
+mac = "AA:BB:CC:00:00:03"
+name = "Demo Station Loveland"
+owner = "Sam"
+lat = 40.4
+lon = -105.1
+elevation_ft = 5000
+timezone = "America/Denver"
+std_offset_minutes = -420
+reference_station = "USW00099003"

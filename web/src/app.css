@@ -1,0 +1,1229 @@
+/* Slate & Signal (design system v1). Light is the default. Dark follows the OS unless the reader picks a theme: the
+   header toggle sets data-theme on <html> (src/lib/theme/theme.ts; static/theme-init.js applies it before paint).
+   Signal Red is reserved for the Now line, the current-year line and the brand mark, in both themes. Every --c-* token is
+   classified in web/src/test/contrast.test.ts, which checks the text, UI and line pairs in light and in dark. The two dark
+   token blocks below must list the same tokens with the same values (the test checks that too). */
+:root {
+  color-scheme: light;
+  /* palette (Slate & Signal) */
+  --ss-slate: #2f354a;
+  --ss-red: #da0404;
+  --ss-brick: #a3473e;
+  --ss-steel: #46668c;
+  --ss-mist: #dfe5ee;
+  --ss-ember: #f08a7e;
+  --ss-haze: #9fb6d3;
+  /* UI roles */
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --text: #2f354a;
+  --muted: #5a6175;
+  --border: #d3d9e2;
+  --border-strong: #808799;
+  --primary: #46668c;
+  --primary-hover: #3a5676;
+  --primary-tint: #dfe5ee;
+  --accent-text: #ffffff;
+  --brand: #da0404;
+  --danger: #a3473e;
+  --danger-bg: #f7e6e3;
+  --ok: #2e6b4a;
+  --warn: #7a5d00;
+  --warn-bg: #fbf1d9;
+  --info-bg: #e9eef5;
+  --focus: #46668c;
+  /* header and footer bands */
+  --header: #2f354a;
+  --header-text: #ffffff;
+  --header-link: #9fb6d3;
+  --header-indicator: #f08a7e;
+  --header-hover: #3b4259;
+  /* icons and day strip (not series; see contrast.test.ts) */
+  --icon-sun: #e9a63c;
+  --icon-sun-edge: #b9791a;
+  --icon-cloud: #e6eaf0;
+  --icon-ink: #5a6175;
+  --icon-snow: #46668c;
+  --icon-bolt: #e0a41a;
+  --icon-bolt-edge: #b07a06;
+  --day-cell: #eef1f5;
+  --day-snow: #3a5676;
+  --grid-line: #e9ecf1;
+  /* chart tokens: "line" must reach 3:1 on each backdrop it is drawn over (white, --c-night, --c-cloud) */
+  --c-forecast: #2f354a;
+  --c-median: #8a2f28;
+  --c-feels: #5e2f95;
+  --c-dew: #2f7fc4;
+  --c-freeze: #808799;
+  --c-rain-bar: #2d70b4;
+  --c-range-precip: #8c6900;
+  --c-accum: #0c7a68;
+  --c-prob: #5a6175;
+  --c-snow: #b9cbe0; /* fill */
+  --c-snow-outline: #46668c;
+  --c-humidity: #0e7490;
+  --c-pressure: #8a6410;
+  --c-wind: #2f354a;
+  --c-gust: #5b7396;
+  --c-arrow: #2f354a;
+  --c-tmax: #8c6900;
+  --c-tmin: #2e6fb0;
+  --c-current: #da0404;
+  --c-prior: #6b7387;
+  --c-lead-0: #1b2030;
+  --c-lead-1: #263a63;
+  --c-lead-2: #2b5190;
+  --c-lead-3: #3b6ab0;
+  --c-lead-4: #4f78ae;
+  --c-lead-5: #5f84ae;
+  --c-lead-6: #6e88aa;
+  --c-lead-7: #7a879b;
+  --c-now: #da0404;
+  --c-crosshair: #2f354a;
+  /* fills */
+  --c-band-outer: #dde6f0;
+  --c-band-inner: #c9d6e6;
+  --c-band-tmax: #f3e3df; /* daily high band: a tint of brick */
+  --c-band-tmin: #dde7f2; /* daily low band: a tint of steel */
+  --c-cloud: #d6dde7;
+  --c-night: #eef1f5;
+  --c-winter: #eaedf2;
+  /* type, space, radius */
+  --font-sans: 'Manrope Variable', Manrope, 'Helvetica Neue', Arial, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+  font-family: var(--font-sans);
+  font-feature-settings: 'tnum' 1;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Dark tokens, explicit choice (data-theme="dark"). Same token list and values as the OS-driven block below. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  /* palette (Slate & Signal, dark anchors) */
+  --ss-slate: #12151d;
+  --ss-red: #ff6a61;
+  --ss-brick: #c96a60;
+  --ss-steel: #8fb3dd;
+  --ss-mist: #232a3c;
+  --ss-ember: #f49a8e;
+  --ss-haze: #9fc0e6;
+  /* UI roles */
+  --bg: #12151d;
+  --surface: #1a1f2c;
+  --text: #e7ebf3;
+  --muted: #aab3c6;
+  --border: #343c51;
+  --border-strong: #7f8aa3;
+  --primary: #8fb3dd;
+  --primary-hover: #aecbea;
+  --primary-tint: #243047;
+  --accent-text: #0f1420;
+  --brand: #ff6a61;
+  --danger: #f4b1a7;
+  --danger-bg: #3a2326;
+  --ok: #8ad3a6;
+  --warn: #f2cf7a;
+  --warn-bg: #3a3222;
+  --info-bg: #1f2b40;
+  --focus: #8fb3dd;
+  /* header and footer bands */
+  --header: #0c0f16;
+  --header-text: #e7ebf3;
+  --header-link: #b9c8dd;
+  --header-indicator: #9fc0e6;
+  --header-hover: #232a3c;
+  /* icons and day strip */
+  --icon-sun: #f0b44c;
+  --icon-sun-edge: #c98a2a;
+  --icon-cloud: #3b4358;
+  --icon-ink: #aab3c6;
+  --icon-snow: #9fc0e6;
+  --icon-bolt: #f2c14e;
+  --icon-bolt-edge: #c9951a;
+  --day-cell: #1f2534;
+  --day-snow: #9fc0e6;
+  --grid-line: #262d3e;
+  /* chart tokens */
+  --c-forecast: #f4f6fa;
+  --c-median: #f0a07a;
+  --c-feels: #c47cf0;
+  --c-dew: #7fcaf5;
+  --c-freeze: #7d88a0;
+  --c-rain-bar: #5a9fe8;
+  --c-range-precip: #f2d65a;
+  --c-accum: #7fd8c8;
+  --c-prob: #aab3c6;
+  --c-snow: #34445f;
+  --c-snow-outline: #9fc0e6;
+  --c-humidity: #5fc2d6;
+  --c-pressure: #e0b872;
+  --c-wind: #e7ebf3;
+  --c-gust: #9db4d0;
+  --c-arrow: #e7ebf3;
+  --c-tmax: #f2d65a;
+  --c-tmin: #8fb3dd;
+  --c-current: #ff6a61;
+  --c-prior: #8c97ae;
+  --c-lead-0: #f4f6fa;
+  --c-lead-1: #d5e2f5;
+  --c-lead-2: #b4cdee;
+  --c-lead-3: #94b8e6;
+  --c-lead-4: #7ea5da;
+  --c-lead-5: #6a93c9;
+  --c-lead-6: #6a88b0;
+  --c-lead-7: #7d88a0;
+  --c-now: #ff6a61;
+  --c-crosshair: #e7ebf3;
+  --c-band-outer: #243049;
+  --c-band-inner: #30405f;
+  --c-band-tmax: #3a3224;
+  --c-band-tmin: #243446;
+  --c-cloud: #3b4358;
+  --c-night: #232a3c;
+  --c-winter: #2b3347;
+}
+
+/* Dark tokens, no explicit choice: follow the OS. Keep this list identical to the data-theme block above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    /* palette (Slate & Signal, dark anchors) */
+    --ss-slate: #12151d;
+    --ss-red: #ff6a61;
+    --ss-brick: #c96a60;
+    --ss-steel: #8fb3dd;
+    --ss-mist: #232a3c;
+    --ss-ember: #f49a8e;
+    --ss-haze: #9fc0e6;
+    /* UI roles */
+    --bg: #12151d;
+    --surface: #1a1f2c;
+    --text: #e7ebf3;
+    --muted: #aab3c6;
+    --border: #343c51;
+    --border-strong: #7f8aa3;
+    --primary: #8fb3dd;
+    --primary-hover: #aecbea;
+    --primary-tint: #243047;
+    --accent-text: #0f1420;
+    --brand: #ff6a61;
+    --danger: #f4b1a7;
+    --danger-bg: #3a2326;
+    --ok: #8ad3a6;
+    --warn: #f2cf7a;
+    --warn-bg: #3a3222;
+    --info-bg: #1f2b40;
+    --focus: #8fb3dd;
+    /* header and footer bands */
+    --header: #0c0f16;
+    --header-text: #e7ebf3;
+    --header-link: #b9c8dd;
+    --header-indicator: #9fc0e6;
+    --header-hover: #232a3c;
+    /* icons and day strip */
+    --icon-sun: #f0b44c;
+    --icon-sun-edge: #c98a2a;
+    --icon-cloud: #3b4358;
+    --icon-ink: #aab3c6;
+    --icon-snow: #9fc0e6;
+    --icon-bolt: #f2c14e;
+    --icon-bolt-edge: #c9951a;
+    --day-cell: #1f2534;
+    --day-snow: #9fc0e6;
+    --grid-line: #262d3e;
+    /* chart tokens */
+    --c-forecast: #f4f6fa;
+    --c-median: #f0a07a;
+    --c-feels: #c47cf0;
+    --c-dew: #7fcaf5;
+    --c-freeze: #7d88a0;
+    --c-rain-bar: #5a9fe8;
+    --c-range-precip: #f2d65a;
+    --c-accum: #7fd8c8;
+    --c-prob: #aab3c6;
+    --c-snow: #34445f;
+    --c-snow-outline: #9fc0e6;
+    --c-humidity: #5fc2d6;
+    --c-pressure: #e0b872;
+    --c-wind: #e7ebf3;
+    --c-gust: #9db4d0;
+    --c-arrow: #e7ebf3;
+    --c-tmax: #f2d65a;
+    --c-tmin: #8fb3dd;
+    --c-current: #ff6a61;
+    --c-prior: #8c97ae;
+    --c-lead-0: #f4f6fa;
+    --c-lead-1: #d5e2f5;
+    --c-lead-2: #b4cdee;
+    --c-lead-3: #94b8e6;
+    --c-lead-4: #7ea5da;
+    --c-lead-5: #6a93c9;
+    --c-lead-6: #6a88b0;
+    --c-lead-7: #7d88a0;
+    --c-now: #ff6a61;
+    --c-crosshair: #e7ebf3;
+    --c-band-outer: #243049;
+    --c-band-inner: #30405f;
+    --c-band-tmax: #3a3224;
+    --c-band-tmin: #243446;
+    --c-cloud: #3b4358;
+    --c-night: #232a3c;
+    --c-winter: #2b3347;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 1024px;
+  line-height: 1.5;
+  font-size: 15px;
+}
+.contents {
+  display: contents;
+}
+a {
+  color: var(--primary);
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+a:hover {
+  text-decoration: underline;
+}
+p a,
+.banner a,
+.state-note a {
+  text-decoration: underline;
+}
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+h1,
+h2,
+h3 {
+  color: var(--text);
+}
+h1 {
+  font-size: 2.25rem;
+  line-height: 1.15;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 1.25rem;
+}
+h2 {
+  font-size: 1.375rem;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 1rem;
+}
+h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0.75rem 0 0.25rem;
+}
+.eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+.mono {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+/* layout: Slate header band */
+.site-nav {
+  display: flex;
+  gap: 0.25rem;
+  align-items: stretch;
+  height: 3.5rem;
+  padding: 0 1.5rem;
+  background: var(--header);
+  color: var(--header-text);
+}
+.site-nav a {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.85rem;
+  color: var(--header-link);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+.site-nav a:hover {
+  color: var(--header-text);
+  background: var(--header-hover);
+  text-decoration: none;
+}
+/* the current page: white text and a 3 px ember bar on the band's bottom edge */
+.site-nav a[aria-current='page'] {
+  color: var(--header-text);
+  box-shadow: inset 0 -3px 0 var(--header-indicator);
+}
+.site-nav .brand,
+.site-nav .brand:hover {
+  gap: 0.55rem;
+  padding: 0 1.25rem 0 0;
+  margin-right: 0.75rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--header-text);
+  background: transparent;
+}
+/* logo mark: a small signal-red tile */
+.site-nav .brand-mark {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 3px;
+  background: var(--brand);
+}
+.site-nav :focus-visible {
+  outline-color: var(--header-indicator);
+  outline-offset: -2px;
+}
+.site-nav .spacer {
+  flex: 1;
+}
+.site-nav button.secondary {
+  align-self: center;
+  background: transparent;
+  color: var(--header-link);
+  border-color: var(--header-link);
+  padding: 0.3rem 0.85rem;
+  font-size: 0.85rem;
+}
+.site-nav button.secondary:hover:not(:disabled) {
+  background: var(--header-hover);
+  color: var(--header-text);
+  border-color: var(--header-text);
+}
+.site-nav button.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 50%;
+  border-color: transparent;
+}
+.theme-toggle svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.theme-toggle svg .fill {
+  fill: currentColor;
+  stroke: none;
+}
+.page {
+  padding: 2rem 1.5rem 3rem;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+.page.narrow {
+  max-width: 34rem;
+}
+/* Slate footer band */
+.footer {
+  padding: 1.5rem;
+  font-size: 0.8rem;
+  color: var(--header-link);
+  background: var(--header);
+  margin-top: 3rem;
+}
+.footer a {
+  color: var(--header-text);
+  text-decoration: underline;
+}
+.footer p {
+  margin: 0.15rem auto;
+  max-width: 1600px;
+}
+
+/* controls */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: center;
+  margin: 0 0 1.25rem;
+}
+/* segmented control: mist track, the selected segment is a raised white tile */
+.tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--primary-tint);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.tabs button {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 0.3rem 0.9rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.tabs button:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: transparent;
+  color: var(--text);
+}
+.tabs button[aria-pressed='true'],
+.tabs button[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--primary);
+}
+button,
+.button {
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 700;
+  padding: 0.45rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--accent-text);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+  transition: background-color 120ms, border-color 120ms, color 120ms;
+}
+button:hover:not(:disabled),
+.button:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+  text-decoration: none;
+}
+button.secondary,
+.button.secondary {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--primary);
+}
+button.secondary:hover:not(:disabled),
+.button.secondary:hover {
+  background: var(--primary-tint);
+  border-color: var(--primary);
+}
+button.danger {
+  background: var(--surface);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+button.danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+input[type='text'],
+input[type='email'],
+input[type='password'],
+input[type='number'],
+input[type='date'],
+select {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+input[type='checkbox'] {
+  accent-color: var(--primary);
+}
+label.field {
+  display: block;
+  margin: 0.75rem 0;
+}
+label.field span {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+label.field input,
+label.field select {
+  width: 100%;
+}
+.secret-input {
+  -webkit-text-security: disc;
+}
+.error-text {
+  color: var(--danger);
+}
+.ok-text {
+  color: var(--ok);
+}
+.muted {
+  color: var(--muted);
+}
+.small {
+  font-size: 0.85rem;
+}
+
+/* panels and banners: borders, not shadows */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
+}
+.banner {
+  padding: 0.7rem 1rem;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--primary);
+  background: var(--info-bg);
+  margin: 0.75rem 0;
+}
+.banner.warn {
+  background: var(--warn-bg);
+  border-left-color: var(--warn);
+}
+.state-note {
+  padding: 0.5rem 0;
+  color: var(--muted);
+}
+
+/* dashboard grid */
+/* Columns fit the container: as many 320 px tracks as fit (one track per station at most), so a fixed column count
+   never overflows the 1024 to 1400 px desktop widths (the old 420 px minimum clipped the third card at 1280 px). */
+.grid {
+  display: grid;
+  gap: 1.5rem;
+  align-items: start;
+  overflow-x: auto;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+}
+.station-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.75rem;
+}
+.station-head .name {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--text);
+}
+.station-head .name:hover {
+  color: var(--primary);
+}
+
+/* charts */
+.chart-frame {
+  margin: 0;
+}
+.chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.chart-svg text {
+  font-size: 11px;
+  fill: var(--muted);
+}
+/* forecast charts (proposal 07 phase 3) are drawn at 1:1 pixels: their width is measured, not scaled */
+.chart-svg.plot {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+}
+.chart-svg.plot text {
+  font-size: 12px;
+}
+.stack-wrap {
+  position: relative;
+}
+.page-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+}
+.page-nav button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.page-range {
+  color: var(--muted);
+}
+.chart-svg .panel-bg {
+  fill: var(--surface);
+}
+.chart-svg .panel-frame {
+  fill: none;
+  stroke: var(--border);
+}
+.chart-svg .night {
+  fill: var(--c-night);
+}
+.chart-svg .day-line {
+  stroke: var(--border);
+  stroke-dasharray: 2 3;
+}
+.chart-svg .panel-unit {
+  font-weight: 600;
+  fill: var(--muted);
+}
+.chart-svg .now-line {
+  stroke: var(--c-now);
+  stroke-width: 1.5;
+}
+.chart-svg .now-label {
+  fill: var(--c-now);
+  font-weight: 600;
+}
+.chart-svg .crosshair {
+  stroke: var(--c-crosshair);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+/* Chart tooltips (proposal 08 section 2): one box per panel, drawn last in the chart's SVG. Classes only (no style
+   attribute, so the CSP holds); pointer-events off so the box never takes the pointer from the chart. */
+.chart-svg .tip {
+  pointer-events: none;
+}
+.chart-svg .tip-bg {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+.chart-svg .tip-title {
+  fill: var(--text);
+  font-weight: 600;
+}
+.chart-svg .tip-label,
+.chart-svg .tip-value {
+  fill: var(--text);
+}
+.chart-svg .ref-freeze {
+  fill: none;
+  stroke: var(--c-freeze);
+  stroke-width: 1;
+  stroke-dasharray: 6 6;
+}
+.chart-svg .line-feels {
+  fill: none;
+  stroke: var(--c-feels);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.chart-svg .line-dew {
+  fill: none;
+  stroke: var(--c-dew);
+  stroke-width: 1.5;
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+}
+/* proposal 07 phase 4: precipitation (bars, accumulated total, chance), sky and wind panels */
+.chart-svg .range-precip {
+  fill: none;
+  stroke: var(--c-range-precip);
+  stroke-width: 2.5;
+}
+.chart-svg .bar-precip {
+  fill: var(--c-rain-bar);
+}
+/* snow: the bar's fill is the hatch pattern (set as an attribute, with a unique id per stack), so no fill here */
+.chart-svg .bar-snow {
+  stroke: var(--c-snow-outline);
+  stroke-width: 0.5;
+}
+.chart-svg .snow-bg {
+  fill: var(--c-snow);
+}
+.chart-svg .snow-hatch {
+  stroke: var(--c-snow-outline);
+  stroke-width: 1;
+}
+.chart-svg .band-accum {
+  fill: var(--c-band-outer);
+}
+.chart-svg .line-accum {
+  fill: none;
+  stroke: var(--c-accum);
+  stroke-width: 2;
+  stroke-dasharray: 6 3;
+}
+.chart-svg .line-prob {
+  fill: none;
+  stroke: var(--c-prob);
+  stroke-width: 1.2;
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+}
+.chart-svg .area-cloud {
+  fill: var(--c-cloud);
+  opacity: 0.85;
+}
+.chart-svg .line-humidity {
+  fill: none;
+  stroke: var(--c-humidity);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
+}
+.chart-svg .line-pressure {
+  fill: none;
+  stroke: var(--c-pressure);
+  stroke-width: 1.5;
+  stroke-dasharray: 8 3 1 3;
+}
+.chart-svg .line-wind {
+  fill: none;
+  stroke: var(--c-wind);
+  stroke-width: 1.5;
+}
+.chart-svg .line-gust {
+  fill: none;
+  stroke: var(--c-gust);
+  stroke-width: 1;
+  stroke-dasharray: 5 3;
+}
+.chart-svg .wind-arrow {
+  fill: var(--c-arrow);
+}
+.chart-svg .day-cell {
+  fill: var(--day-cell);
+}
+.chart-svg .day-date {
+  font-weight: 700;
+  fill: var(--text);
+}
+.chart-svg .day-text,
+.chart-svg .day-hilo {
+  fill: var(--text);
+}
+.chart-svg .day-hilo {
+  font-weight: 600;
+}
+.chart-svg .day-snow {
+  fill: var(--day-snow);
+  font-weight: 600;
+}
+.icon-sun {
+  fill: var(--icon-sun);
+  stroke: var(--icon-sun-edge);
+  stroke-width: 1;
+}
+.icon-sun-ray {
+  fill: none;
+  stroke: var(--icon-sun-edge);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+.icon-cloud {
+  fill: var(--icon-cloud);
+  stroke: var(--icon-ink);
+  stroke-width: 1;
+}
+.icon-fog {
+  fill: none;
+  stroke: var(--icon-ink);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.icon-rain {
+  fill: none;
+  stroke: var(--c-rain-bar);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.icon-rain-dot {
+  fill: var(--c-rain-bar);
+}
+.icon-snow {
+  fill: none;
+  stroke: var(--icon-snow);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+.icon-bolt {
+  fill: var(--icon-bolt);
+  stroke: var(--icon-bolt-edge);
+  stroke-width: 0.6;
+}
+.icon-unknown {
+  fill: none;
+  stroke: var(--muted);
+}
+.forecast-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.forecast-row .row-title {
+  font-size: 1rem;
+  margin: 0 0 0.35rem;
+}
+/* station page sections: sticky sub-nav with in-page anchors */
+.section-nav {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 1.25rem;
+  padding: 0.5rem 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.section-nav a {
+  font-weight: 600;
+}
+.station-section {
+  scroll-margin-top: 3.25rem;
+}
+.chart-svg .axis line,
+.chart-svg .axis path {
+  stroke: var(--border);
+}
+.chart-svg .grid-line {
+  stroke: var(--grid-line);
+}
+.chart-svg .winter {
+  fill: var(--c-winter);
+  opacity: 0.7;
+}
+/* no opacity on the bands: the lines drawn over them are tested against the token colour itself */
+.chart-svg .band-outer {
+  fill: var(--c-band-outer);
+}
+.chart-svg .band-inner {
+  fill: var(--c-band-inner);
+}
+.chart-svg path.line {
+  fill: none;
+  stroke-linejoin: round;
+}
+/* Dash patterns (proposal 08 section 3.4): within one panel every line has a distinct dash, so colour is never the only
+   channel. contrast.test.ts reads these rules (PANEL_LINES) and fails if two lines in a panel share a pattern. */
+.chart-svg .line-median {
+  fill: none;
+  stroke: var(--c-median);
+  stroke-width: 1.5;
+  stroke-dasharray: 10 3;
+}
+/* no opacity on these two: a line's contrast must hold at full strength (contrast.test.ts) */
+.chart-svg .line-prior {
+  fill: none;
+  stroke: var(--c-prior);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+/* daily view: high is solid gold, low is dashed blue, each over its own band */
+.chart-svg .line-tmax {
+  fill: none;
+  stroke: var(--c-tmax);
+  stroke-width: 1.5;
+}
+.chart-svg .line-tmin {
+  fill: none;
+  stroke: var(--c-tmin);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
+}
+.chart-svg .band-tmax {
+  fill: var(--c-band-tmax);
+}
+.chart-svg .band-tmin {
+  fill: var(--c-band-tmin);
+}
+.chart-svg .line-current {
+  fill: none;
+  stroke: var(--c-current);
+  stroke-width: 2.5;
+}
+.chart-svg .line-current-partial {
+  fill: none;
+  stroke: var(--c-current);
+  stroke-width: 2.5;
+  stroke-dasharray: 4 3;
+}
+.chart-svg .line-forecast {
+  fill: none;
+  stroke: var(--c-forecast);
+  stroke-width: 1.5;
+}
+.chart-svg .point {
+  fill: var(--c-current);
+}
+.chart-svg .bar-range {
+  stroke: var(--c-band-inner);
+  stroke-width: 6;
+}
+.chart-svg .marker {
+  fill: var(--c-median);
+}
+/* lead lines are opaque: each lead has its own token and width (contrast.test.ts checks each on white and night) */
+.chart-svg .line-lead-0,
+.chart-svg .line-lead-1,
+.chart-svg .line-lead-2,
+.chart-svg .line-lead-3,
+.chart-svg .line-lead-4,
+.chart-svg .line-lead-5,
+.chart-svg .line-lead-6,
+.chart-svg .line-lead-7 {
+  fill: none;
+}
+/* Each lead has its own width and dash (contrast.test.ts requires distinct dashes within the panel). The colours
+   alone do not separate neighbouring leads, so the legend and tooltip carry the identity too. */
+.chart-svg .line-lead-0 {
+  stroke: var(--c-lead-0);
+  stroke-width: 2.5;
+}
+.chart-svg .line-lead-1 {
+  stroke: var(--c-lead-1);
+  stroke-width: 2;
+  stroke-dasharray: 10 3;
+}
+.chart-svg .line-lead-2 {
+  stroke: var(--c-lead-2);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
+}
+.chart-svg .line-lead-3 {
+  stroke: var(--c-lead-3);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
+}
+.chart-svg .line-lead-4 {
+  stroke: var(--c-lead-4);
+  stroke-width: 1.5;
+  stroke-dasharray: 8 3 1 3;
+}
+.chart-svg .line-lead-5 {
+  stroke: var(--c-lead-5);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.chart-svg .line-lead-6 {
+  stroke: var(--c-lead-6);
+  stroke-width: 1.5;
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+}
+.chart-svg .line-lead-7 {
+  stroke: var(--c-lead-7);
+  stroke-width: 1.5;
+  stroke-dasharray: 12 3 3 3;
+}
+/* chart legends (ChartLegend.svelte): the swatch uses the series' own class; the label is text */
+.chart-svg .legend-label {
+  font-size: 12px;
+  fill: var(--text);
+}
+.chart-svg .legend-band {
+  fill: var(--surface);
+}
+.provenance {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.provenance li {
+  margin: 0.1rem 0;
+}
+details.data-table summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  margin-top: 0.4rem;
+}
+table.data {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  margin: 0.3rem 0;
+}
+table.data th,
+table.data td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.15rem 0.6rem;
+  text-align: right;
+}
+table.data th:first-child,
+table.data td:first-child {
+  text-align: left;
+}
+.table-scroll {
+  max-height: 16rem;
+  overflow: auto;
+}
+
+/* lists */
+ul.plain {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0;
+}
+ul.plain li {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.badge {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.badge.approved {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.badge.pending {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.badge.declined,
+.badge.revoked {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.inline-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ---- Slate & Signal polish (overrides above; colours and dash patterns stay in the rules above) ---- */
+.chart-frame figcaption {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+.chart-frame figcaption strong {
+  font-weight: 700;
+}
+.chart-svg text {
+  font-family: var(--font-sans);
+  font-feature-settings: 'tnum' 1;
+}
+.chart-svg .tip-bg {
+  rx: 6px;
+  ry: 6px;
+}
+.chart-svg .tip-title {
+  font-weight: 700;
+}
+.chart-svg .tip-value {
+  font-weight: 600;
+}
+.chart-svg .now-label {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.chart-svg .day-date {
+  font-weight: 800;
+}
+.chart-svg .day-precip {
+  fill: var(--muted);
+}
+.page-nav {
+  margin: 0 0 0.75rem;
+}
+.page-range {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+/* station page: sticky section tabs and one card per section */
+.section-nav {
+  gap: 0.25rem;
+  padding: 0.6rem 0;
+  margin: 0 0 1.5rem;
+  background: var(--bg);
+}
+.section-nav a {
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.section-nav a:hover {
+  background: var(--primary-tint);
+  color: var(--text);
+  text-decoration: none;
+}
+.station-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1.5rem;
+  margin: 0 0 1.5rem;
+  scroll-margin-top: 4rem;
+}
+.station-section .card {
+  border-color: var(--border);
+  background: var(--bg);
+}
+.forecast-rows {
+  gap: 1.5rem;
+}
+.forecast-row .row-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin: 0 0 0.75rem;
+}
+.forecast-row .row-title a {
+  color: var(--text);
+}
+.forecast-row .row-title a:hover {
+  color: var(--primary);
+}
+.provenance {
+  margin-top: 0.75rem;
+}
+table.data {
+  font-variant-numeric: tabular-nums;
+}
+table.data th {
+  font-weight: 700;
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+ul.plain li {
+  padding: 0.6rem 0;
+}
+.badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.12rem 0.6rem;
+  border-color: var(--border-strong);
+}
