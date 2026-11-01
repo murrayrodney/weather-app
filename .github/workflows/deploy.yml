@@ -23,7 +23,7 @@ jobs:
       backend: ${{ steps.f.outputs.backend }}
       web: ${{ steps.f.outputs.web }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false, fetch-depth: 0 }
       - id: f
         env: { BEFORE: "${{ github.event.before }}" }
@@ -52,16 +52,16 @@ jobs:
     outputs:
       sha256: ${{ steps.sum.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       # The repo pins Rust 1.95 (backend/Dockerfile RUST_VERSION); the guide said "stable".
       - run: rustup toolchain install 1.95 --profile minimal && rustup default 1.95
-      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with: { workspaces: backend }
       - run: cargo build --release --manifest-path backend/Cargo.toml --locked -p admin
       - id: sum
         run: echo "sha256=$(sha256sum backend/target/release/admin | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: admin, path: backend/target/release/admin, retention-days: 1, if-no-files-found: error }
   deploy:                           # always runs after the parts that ran, so the approval gate also guards web-only pushes
     needs: [changes, backend, web, build-admin]
@@ -70,10 +70,10 @@ jobs:
     environment: production
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false, fetch-depth: 2 }
-      - uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be # 1.5
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ needs.changes.outputs.backend == 'true' }}
         with: { name: admin, path: admin-bin }
       - name: verify the admin binary is the one the secret-free job built
@@ -147,7 +147,7 @@ jobs:
       contents: write               # the only job with write access; used only by the push step
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false, fetch-depth: 0 }     # full history so the fast-forward check against `production` works
       - name: require SITE_URL (fail fast rather than skipping the wait)
         env: { SITE_URL: "${{ vars.SITE_URL }}" }
