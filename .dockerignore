@@ -1,0 +1,7 @@
+# Build context for the backup image is the repo root (ops/backup/Dockerfile, 06 section 6).
+# Everything is excluded except what that image copies, which keeps .env, target/, node_modules/
+# and .git out of the context. Backend builds use backend/ as context with backend/.dockerignore.
+*
+!ops/backup/backup.sh
+!ops/db/checks/size.sql
+!backend/certs/
