@@ -411,6 +411,27 @@ h3 {
   color: var(--header-text);
   border-color: var(--header-text);
 }
+.site-nav button.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 50%;
+  border-color: transparent;
+}
+.theme-toggle svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.theme-toggle svg .fill {
+  fill: currentColor;
+  stroke: none;
+}
 .page {
   padding: 2rem 1.5rem 3rem;
   max-width: 1600px;

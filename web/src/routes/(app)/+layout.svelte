@@ -32,7 +32,7 @@
 </script>
 
 <nav class="site-nav" aria-label="Main">
-  <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Family Weather</a>
+  <a class="brand" href="/">Family Weather</a>
   {#each links as link (link.href)}
     <a href={link.href} aria-current={isCurrent(link.href, page.url.pathname) ? 'page' : undefined}>{link.label}</a>
   {/each}

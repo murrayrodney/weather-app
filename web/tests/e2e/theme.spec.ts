@@ -16,25 +16,25 @@ test('the toggle cycles System, Light, Dark and the explicit choice survives a r
   const w = await watchCsp(page);
   await page.goto('/');
   const toggle = page.getByTestId('theme-toggle');
-  await expect(toggle).toHaveText('Theme: System');
+  await expect(toggle).toHaveAttribute('title', 'Theme: System');
   await expect(page.locator('html')).not.toHaveAttribute('data-theme');
 
   await toggle.click();
-  await expect(toggle).toHaveText('Theme: Light');
+  await expect(toggle).toHaveAttribute('title', 'Theme: Light');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   expect(await page.evaluate(() => localStorage.getItem('theme'))).toBe('light');
 
   await toggle.click();
-  await expect(toggle).toHaveText('Theme: Dark');
+  await expect(toggle).toHaveAttribute('title', 'Theme: Dark');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   expect(await page.evaluate(() => localStorage.getItem('theme'))).toBe('dark');
 
   await page.reload();
-  await expect(toggle).toHaveText('Theme: Dark');
+  await expect(toggle).toHaveAttribute('title', 'Theme: Dark');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 
   await toggle.click();
-  await expect(toggle).toHaveText('Theme: System');
+  await expect(toggle).toHaveAttribute('title', 'Theme: System');
   await expect(page.locator('html')).not.toHaveAttribute('data-theme');
   expect(await page.evaluate(() => localStorage.getItem('theme'))).toBeNull();
   await w.expectClean('theme toggle, reload and back to System');
@@ -64,7 +64,7 @@ test('System follows the OS, and an explicit choice wins over the OS in both dir
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('/');
   const toggle = page.getByTestId('theme-toggle');
-  await expect(toggle).toHaveText('Theme: System');
+  await expect(toggle).toHaveAttribute('title', 'Theme: System');
   expect(await bg()).toBe(DARK_BG);
   expect(await scheme()).toBe('dark');
 
@@ -82,7 +82,7 @@ test('System follows the OS, and an explicit choice wins over the OS in both dir
 
   // back to System: the OS is light now, so light
   await toggle.click();
-  await expect(toggle).toHaveText('Theme: System');
+  await expect(toggle).toHaveAttribute('title', 'Theme: System');
   expect(await bg()).toBe(LIGHT_BG);
   await w.expectClean('OS dark and light with System and explicit choices');
 });
