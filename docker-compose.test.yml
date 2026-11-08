@@ -66,6 +66,8 @@ services:
       - |
         FEAT=""; [ -d crates/api ] && FEAT="--features api/test-support"
         EXCL=""; [ -d crates/admin ] && EXCL="--exclude admin"
+        # the host-side secret-log check (ops/local/check-secret-logs.sh, another uid on Linux CI) deletes .local/canary-tokens afterwards
+        mkdir -p /work/.local && chmod 777 /work/.local
         cargo test --workspace $$EXCL $$FEAT
         if [ -d crates/api ] && cargo tree -p api -e normal,build,features -f '{p} {f}' | grep -E 'decrypt|test-support|testdb'; then echo "api enables a forbidden core feature"; exit 1; fi
         if [ -d crates/admin ]; then cargo test -p admin --features compose-tests -- --test-threads=1; fi
