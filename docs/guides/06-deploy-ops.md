@@ -207,11 +207,11 @@ fly secrets list -a integrated-awn-weather-poller                 # names and di
 Run from the **repo root**; the working-directory argument is the Docker build context (`backend`), and `--dockerfile` is relative to the shell's working directory:
 
 ```bash
-flyctl deploy backend --config ops/fly/poller.toml --dockerfile backend/Dockerfile --remote-only --ha=false --image-label sha-<sha12>
-flyctl deploy backend --config ops/fly/api.toml    --dockerfile backend/Dockerfile --remote-only --ha=false --image-label sha-<sha12>
+flyctl deploy backend --config ../ops/fly/poller.toml --dockerfile Dockerfile --remote-only --ha=false --image-label sha-<sha12>
+flyctl deploy backend --config ../ops/fly/api.toml --dockerfile Dockerfile --remote-only --ha=false --image-label sha-<sha12>
 ```
-**Verify in task 1** with `flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --build-only`: if flyctl resolves `--dockerfile` relative to the working-directory argument, change the flag to `--dockerfile Dockerfile` here and in `deploy.yml`. **Default (proposals/02):** each app does its own `--remote-only` build (layers are cached). Optional later improvement, only if someone verifies that an app-scoped deploy token can pull a sibling app's image (proposal 02 fact 6): build once with `flyctl deploy ... --build-only --push` and deploy the same image to the other app with `--image`. Every deploy, rollback and `flyctl config validate` always passes `--config`:
-`flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --image registry.fly.io/integrated-awn-weather-api:sha-<previous> --ha=false`.
+**Path resolution (verified Nov 8, 2026, flyctl 0.5.5):** `flyctl deploy backend` changes into `backend/` before resolving `--config` and `--dockerfile`, so both are relative to `backend/` (hence `../ops/fly/...` and `Dockerfile`); the build context stays `backend/`. Backup builds (`fly deploy .`) are unaffected. **Default (proposals/02):** each app does its own `--remote-only` build (layers are cached). Optional later improvement, only if someone verifies that an app-scoped deploy token can pull a sibling app's image (proposal 02 fact 6): build once with `flyctl deploy ... --build-only --push` and deploy the same image to the other app with `--image`. Every deploy, rollback and `flyctl config validate` always passes `--config`:
+`flyctl deploy backend --config ../ops/fly/api.toml --dockerfile Dockerfile --image registry.fly.io/integrated-awn-weather-api:sha-<previous> --ha=false`.
 
 ## 5. One-off machines (D6)
 
@@ -839,11 +839,11 @@ jobs:
       - name: deploy poller first (exactly one machine; backend changes only)
         if: ${{ needs.changes.outputs.backend == 'true' }}
         env: { FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN_POLLER }}" }
-        run: flyctl deploy backend --config ops/fly/poller.toml --dockerfile backend/Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
+        run: flyctl deploy backend --config ../ops/fly/poller.toml --dockerfile Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
       - name: deploy api (skipped until 02 ships: repo variable DEPLOY_API=true)
         if: ${{ vars.DEPLOY_API == 'true' && needs.changes.outputs.backend == 'true' }}
         env: { FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN_API }}" }
-        run: flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
+        run: flyctl deploy backend --config ../ops/fly/api.toml --dockerfile Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
       - name: assert machine counts
         env:
           TOKEN_API: ${{ secrets.FLY_API_TOKEN_API }}
@@ -1173,7 +1173,7 @@ Target: the **drill** restores into a local Compose database **on Rodney's lapto
 
 ## 16. Implementation tasks (ordered)
 
-1. [ ] Create `ops/fly/api.toml`, `ops/fly/poller.toml`, `ops/backup/fly.toml`, root `.dockerignore` (4.2, 4.3, 6). *Status: files written and structure checked (`api.toml` `min_machines_running = 0`, `poller.toml` no http_service/services/auto_stop, backup toml no processes/restart; the `.dockerignore` context holds exactly the three backup inputs). Not verifiable without a Fly token: `flyctl config validate` and `flyctl deploy --build-only` both stop at "no access token available" (flyctl v0.5.1), so config validation and the `--dockerfile` path resolution are covered by the first deploy job (`config validate --strict`, then the deploy itself); if `--dockerfile backend/Dockerfile` fails to resolve there, switch to `--dockerfile Dockerfile` (4.7). Tick this box after that.* **Done when** `flyctl config validate --config <file>` passes where it needs no token (otherwise in the deploy job), api.toml has `min_machines_running = 0`, poller.toml has no `[http_service]`, `[[services]]` or `auto_stop_machines`, backup toml has no `[processes]`/`[[restart]]`, and `flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --build-only` resolves the Dockerfile path (adjust 4.7 if not).
+1. [ ] Create `ops/fly/api.toml`, `ops/fly/poller.toml`, `ops/backup/fly.toml`, root `.dockerignore` (4.2, 4.3, 6). *Status: files written and structure checked (`api.toml` `min_machines_running = 0`, `poller.toml` no http_service/services/auto_stop, backup toml no processes/restart; the `.dockerignore` context holds exactly the three backup inputs). Not verifiable without a Fly token: `flyctl config validate` and `flyctl deploy --build-only` both stop at "no access token available" (flyctl v0.5.1), so config validation is covered by the first deploy job (`config validate --strict`, then the deploy itself); the `--dockerfile` path resolution is verified (relative to `backend/`, see 4.7). Tick this box after that.* **Done when** `flyctl config validate --config <file>` passes where it needs no token (otherwise in the deploy job), api.toml has `min_machines_running = 0`, poller.toml has no `[http_service]`, `[[services]]` or `auto_stop_machines`, backup toml has no `[processes]`/`[[restart]]`, and `flyctl deploy backend --config ../ops/fly/api.toml --dockerfile Dockerfile --build-only` resolves the Dockerfile path.
 2. [ ] Create `ops/fly/run-oneoff.sh` (section 5). *Status: written; shellcheck clean; no-args and 3-args print usage and exit 2; a non-`/usr/local/bin` command and `invite`/`reset-link` in batch mode exit 2. Remaining, Rodney only (needs a Fly account): the dry run below.* **Done when** `shellcheck` is clean, running without enough arguments prints usage and exits 2, and a non-`/usr/local/bin` command in `batch` mode is rejected, and a **dry run** against the poller image (`ops/fly/run-oneoff.sh batch integrated-awn-weather-poller integrated-awn-weather-poller poller -- /usr/local/bin/admin --version`, which exits 0 and touches no database) proves `fly machine wait` returns only after the command has finished, the logs are printed, the exit code is propagated, and the machine is destroyed.
 3. [x] Create `ops/backup/{Dockerfile,backup.sh,test.sh}`. **Done when** `ops/backup/test.sh` passes locally (9.7). *Done; the S3 stand-in is `adobe/s3mock`, because MinIO's public images are no longer published (the conditional-write check stays a real-S3 item, section 13 check 15).*
 4. [x] Create `ops/ci/smoke.sh`, `ops/ci/check-deployed-csp.mjs` (section 13) and `ops/ci/check-demo-values.sh` (below). **Done when** smoke passes against the Compose stack with `SMOKE_LOCAL=1 SITE_URL=http://localhost:8000` and the CSP script fails on a copy of `200.html` with an extra inline script.
