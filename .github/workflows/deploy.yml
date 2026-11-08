@@ -110,11 +110,11 @@ jobs:
       - name: deploy poller first (exactly one machine; backend changes only)
         if: ${{ needs.changes.outputs.backend == 'true' }}
         env: { FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN_POLLER }}" }
-        run: flyctl deploy backend --config ops/fly/poller.toml --dockerfile backend/Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
+        run: flyctl deploy backend --config ../ops/fly/poller.toml --dockerfile Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
       - name: "deploy api (skipped until repo variable DEPLOY_API=true)"
         if: ${{ vars.DEPLOY_API == 'true' && needs.changes.outputs.backend == 'true' }}
         env: { FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN_API }}" }
-        run: flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
+        run: flyctl deploy backend --config ../ops/fly/api.toml --dockerfile Dockerfile --remote-only --ha=false --image-label "sha-${GITHUB_SHA::12}"
       - name: assert machine counts
         env:
           TOKEN_API: ${{ secrets.FLY_API_TOKEN_API }}
