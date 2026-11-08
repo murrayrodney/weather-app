@@ -106,7 +106,7 @@ Database objects (names per `04-database.md`; 04 wins on conflict and this guide
 
 - HTTP routes in section 5, JSON only, error envelope from conventions. Every response (including errors, 404 fallback, 408/413/503 from layers, and health) carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
 - Subcommands: `api` (serve) and `api healthcheck` (GET `http://127.0.0.1:<port of API_BIND_ADDR>/api/health`, exit 0 on 200 else 1; no shell or curl in the image).
-- The shared `backend/Dockerfile` (created by 03; this guide adds the api build step and checks, 4.14), deployed as Fly app `famweather-api` (running `api`).
+- The shared `backend/Dockerfile` (created by 03; this guide adds the api build step and checks, 4.14), deployed as Fly app `integrated-awn-weather-api` (running `api`).
 
 ### 3.3 Open requests for other guides
 
@@ -463,7 +463,7 @@ The API does not run migrations. Queries use runtime `sqlx::query`/`query_scalar
 `backend/Dockerfile` is created by 03's core milestone (conventions: one image, binaries present only for crates that exist); this guide does NOT create it. When `crates/api` lands, add to the existing Dockerfile and its CI checks:
 
 1. The `api` build step in the `builder` stage: `cargo build --release --locked -p api`, run separately from `-p poller -p admin` so `decrypt` (enabled by `poller`) cannot leak into `api` through feature unification, and copy `/usr/local/bin/api` into the final stage. (There is no `.sqlx/` data: queries are runtime `sqlx::query`, 4.12.)
-2. Final stage requirements the API depends on (already specified by conventions and 03; verify, do not redefine): distroless `cc-debian12:nonroot` (no shell, uid 65532), `COPY certs/ /etc/ssl/app-certs/` (CA at `/etc/ssl/app-certs/supabase-ca.crt`; production config refuses to start if the file named by `sslrootcert` is missing), default command overridable (`famweather-api` runs `api`), no fixtures in the image (replay fixtures only via the volume at `FIXTURES_DIR`), read-only root filesystem works.
+2. Final stage requirements the API depends on (already specified by conventions and 03; verify, do not redefine): distroless `cc-debian12:nonroot` (no shell, uid 65532), `COPY certs/ /etc/ssl/app-certs/` (CA at `/etc/ssl/app-certs/supabase-ca.crt`; production config refuses to start if the file named by `sslrootcert` is missing), default command overridable (`integrated-awn-weather-api` runs `api`), no fixtures in the image (replay fixtures only via the volume at `FIXTURES_DIR`), read-only root filesystem works.
 3. API image checks added to CI (no shell in the image): `docker create --name img-check <image>`; `docker cp img-check:/usr/local/bin/api -` exists; when `backend/certs/supabase-ca.crt` exists in the repo, `docker cp img-check:/etc/ssl/app-certs/supabase-ca.crt -` hashes equal to it; `docker image inspect` shows user 65532; the feature-isolation `cargo tree` check from 4.7 (fails on `decrypt`, `test-support`, `testdb` in `api`).
 4. `api healthcheck` is the container health command for Compose; Fly uses HTTP `GET /api/health`. `api` listens on `ApiEnv.bind_addr`; SIGTERM -> 25 s graceful shutdown.
 
@@ -981,7 +981,7 @@ Conflicts and gaps:
 - Disconnecting a credential or station is not specified; not implemented.
 - Netlify proxy: `deploy_context` is not checked, by decision (previews are on and proxy to the production API; 4.10).
 - If the API ever runs on more than one machine, the in-memory limiter must move to shared storage (connect limits and the AWN gate are already in Postgres).
-- Fly layout is four apps (proposals/02, accepted); the API only assumes `famweather-api` runs `api` with the secrets in conventions and may auto-stop (cold-start JWKS fetch, `min_connections = 0`).
+- Fly layout is four apps (proposals/02, accepted); the API only assumes `integrated-awn-weather-api` runs `api` with the secrets in conventions and may auto-stop (cold-start JWKS fetch, `min_connections = 0`).
 
 ## 10. References
 

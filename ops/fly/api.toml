@@ -1,5 +1,5 @@
-app = "famweather-api"
-primary_region = "sjc"          # co-locate with Supabase; Open question 2
+app = "integrated-awn-weather-api"
+primary_region = "sjc"          # co-locate with Supabase (us-west-1); 06 section 4.1
 kill_signal = "SIGTERM"
 kill_timeout = "30s"
 

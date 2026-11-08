@@ -19,7 +19,7 @@ Non-goals: public sign-up, mobile-first design, multi-region scale, running our 
 
 ## Architecture and data flow
 
-The web app is a static single-page app on Netlify. The API and the poller are separate Fly.io apps built from one codebase, with exactly one machine each, so there is no high-availability pair. Fly gives every machine in an app the same secrets, so keeping the decryption key away from the API takes separate apps: `famweather-api`, `famweather-poller`, `famweather-admin` (no machines at rest; used only for one-off admin runs) and `famweather-backup` (the daily backup). The poller is always on and fully independent of the API; the API machine may sleep when idle and wakes in about a second (decided). Both talk to Supabase Postgres, and `sqlx` migrations are the only schema tool.
+The web app is a static single-page app on Netlify. The API and the poller are separate Fly.io apps built from one codebase, with exactly one machine each, so there is no high-availability pair. Fly gives every machine in an app the same secrets, so keeping the decryption key away from the API takes separate apps: `integrated-awn-weather-api`, `integrated-awn-weather-poller`, `integrated-awn-weather-admin` (no machines at rest; used only for one-off admin runs) and `integrated-awn-weather-backup` (the daily backup). The poller is always on and fully independent of the API; the API machine may sleep when idle and wakes in about a second (decided). Both talk to Supabase Postgres, and `sqlx` migrations are the only schema tool.
 
 &#91;embedded content: data flow · 3 sources, Fly.io, Supabase, Netlify\]
 
@@ -95,7 +95,7 @@ There is one AWN application key for the whole app, held as a Fly secret and use
 - Use least-privilege database roles with verified encrypted connections, never the `postgres` admin login: the API cannot read credentials, the poller can, and backups have their own read-only role. Developers browse data locally, not from production.
 - The connect-flow key check is rate-limited per user, returns only valid or invalid, and never accepts a URL or host.
 - On a 401 or 403, mark the credential invalid, stop retrying and show "needs reconnecting" in the UI. Back off on 429.
-- A scheduled machine in its own Fly app (`famweather-backup`) takes a daily `pg_dump` plus a list of login ids and emails (through a small locked-down database function), encrypts both before upload and stores them in AWS S3, because station history cannot be rebuilt.
+- A scheduled machine in its own Fly app (`integrated-awn-weather-backup`) takes a daily `pg_dump` plus a list of login ids and emails (through a small locked-down database function), encrypts both before upload and stores them in AWS S3, because station history cannot be rebuilt.
 
 **Access and sign-up**
 

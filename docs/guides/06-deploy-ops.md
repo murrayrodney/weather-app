@@ -49,10 +49,10 @@ Fly secrets are **app-wide**: "An app's secrets are available as environment var
 
 | Fly app | Process group | Machines | Holds | Config file |
 | --- | --- | --- | --- | --- |
-| `famweather-api` | `api` | 1 (`auto_stop` allowed) | `app_api` DB URL, `CREDENTIALS_PUBLIC_KEY`, `CREDENTIALS_KEY_VERSION`, `AWN_APPLICATION_KEY`, `NETLIFY_PROXY_SECRET` | `ops/fly/api.toml` (outbound HTTPS to `api.open-meteo.com`, `ensemble-api.open-meteo.com` and `previous-runs-api.open-meteo.com` for live forecasts; keyless, nothing to configure; Fly allows outbound by default) |
-| `famweather-poller` | `poller` | 1, always on, no services | `app_poller` DB URL, `CREDENTIALS_PRIVATE_KEY`, `CREDENTIALS_KEY_VERSION`, `AWN_APPLICATION_KEY`, `HEALTHCHECK_URL_*` | `ops/fly/poller.toml` |
-| `famweather-admin` | none (zero machines at rest) | 0 | `app_migrator` DB URL, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `CREDENTIALS_PUBLIC_KEY`, `CREDENTIALS_KEY_VERSION` | none |
-| `famweather-backup` | none (machine image runs the script) | 1 scheduled, `--restart no` | `app_backup` DB URL, `AWS_*`, `BACKUP_S3_BUCKET`, `BACKUP_AGE_RECIPIENT`, `HEALTHCHECK_URL_BACKUP`, `HEALTHCHECK_URL_DBSIZE` | `ops/backup/fly.toml` |
+| `integrated-awn-weather-api` | `api` | 1 (`auto_stop` allowed) | `app_api` DB URL, `CREDENTIALS_PUBLIC_KEY`, `CREDENTIALS_KEY_VERSION`, `AWN_APPLICATION_KEY`, `NETLIFY_PROXY_SECRET` | `ops/fly/api.toml` (outbound HTTPS to `api.open-meteo.com`, `ensemble-api.open-meteo.com` and `previous-runs-api.open-meteo.com` for live forecasts; keyless, nothing to configure; Fly allows outbound by default) |
+| `integrated-awn-weather-poller` | `poller` | 1, always on, no services | `app_poller` DB URL, `CREDENTIALS_PRIVATE_KEY`, `CREDENTIALS_KEY_VERSION`, `AWN_APPLICATION_KEY`, `HEALTHCHECK_URL_*` | `ops/fly/poller.toml` |
+| `integrated-awn-weather-admin` | none (zero machines at rest) | 0 | `app_migrator` DB URL, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `CREDENTIALS_PUBLIC_KEY`, `CREDENTIALS_KEY_VERSION` | none |
+| `integrated-awn-weather-backup` | none (machine image runs the script) | 1 scheduled, `--restart no` | `app_backup` DB URL, `AWS_*`, `BACKUP_S3_BUCKET`, `BACKUP_AGE_RECIPIENT`, `HEALTHCHECK_URL_BACKUP`, `HEALTHCHECK_URL_DBSIZE` | `ops/backup/fly.toml` |
 
 The admin app deliberately does not hold `AWN_APPLICATION_KEY` (least privilege; `add-station` must not require it: closed as Open question 7).
 
@@ -86,7 +86,7 @@ Never set `JWT_HS256_SECRET`, `AWN_MODE=replay`, `FIXTURES_DIR` or a `postgres` 
 
 ### 4.1 Region and networking
 
-- Region: pick the Supabase region first (section 7), then the nearest Fly region. Recommendation (unconfirmed, Open question 2): Supabase `us-west-1` and Fly `sjc`. Fly cannot target an AWS AZ; measure RTT after deploy (target under 10 ms) from the backup image with `psql -c 'select 1'` and `\timing`.
+- Region (decided Nov 1, 2026): Supabase **specific region** `us-west-1` (West US, North California), Fly `sjc`. The dashboard's general "Americas" choice places projects in `us-east-1`, so pick the specific region. Fly has no Oregon region (checked [docs.fly.io/reference/regions](https://docs.fly.io/reference/regions)), which rules out `us-west-2`. Fly cannot target an AWS AZ; measure RTT after deploy (target under 10 ms) from the backup image with `psql -c 'select 1'` and `\timing`.
 - DB connection (C3): **direct** `db.<project-ref>.supabase.co:5432` (IPv6 only) from Fly. Rationale: session-level connections for advisory locks and `core::ratelimit` (03), prepared statements, no pooler hop, no $4/month IPv4 add-on. Username is the plain role name.
 - **Never** the transaction pooler (port 6543): breaks prepared statements and advisory locks ([Supabase connecting](https://supabase.com/docs/guides/database/connecting-to-postgres)).
 - Session pooler (`<pooler-host>:5432`, username `<role>.<project-ref>`; copy the pooler hostname from the dashboard Connect panel, it is region specific) is IPv4-capable and is used for CI migrations and exposure checks (GitHub runners are IPv4-only), for the operator's bootstrap `psql` (a home network may be IPv4-only; the direct host is IPv6-only) and as emergency fallback.
@@ -99,8 +99,8 @@ Never set `JWT_HS256_SECRET`, `AWN_MODE=replay`, `FIXTURES_DIR` or a `postgres` 
 No `[build]` section: build inputs are passed on the command line (4.7).
 
 ```toml
-app = "famweather-api"
-primary_region = "sjc"          # co-locate with Supabase; Open question 2
+app = "integrated-awn-weather-api"
+primary_region = "sjc"          # co-locate with Supabase (us-west-1); 06 section 4.1
 kill_signal = "SIGTERM"
 kill_timeout = "30s"
 
@@ -143,7 +143,7 @@ kill_timeout = "30s"
 ### 4.3 `ops/fly/poller.toml`
 
 ```toml
-app = "famweather-poller"
+app = "integrated-awn-weather-poller"
 primary_region = "sjc"
 kill_signal = "SIGTERM"
 kill_timeout = "30s"
@@ -183,7 +183,7 @@ Health: no HTTP port (03), so no Fly check. `poller healthcheck` (heartbeat file
 `release_command` would need `app_migrator` credentials as a secret in the API or poller app (readable by every machine), violating S5/S12. Conventions: "Migrations run from CI in a protected environment". The deploy job builds `admin` (`cargo run --release -p admin -- migrate`) with `APP_ENV=production` and `DATABASE_URL` = `app_migrator` over the **session pooler**, `sslmode=verify-full`, `sslrootcert=<runner path to backend/certs/supabase-ca.crt>`, before deploying binaries.
 - Migrations must be backward compatible with the previous release (expand then contract): old binaries run until redeploy completes. Down migrations refuse to run in production (04).
 - Bootstrap is manual and one-time: `roles.sql`, then `auth_access.sql` (section 7). `admin migrate` assumes both are done.
-- Fallback if CI cannot reach the DB: Rodney runs `ops/fly/run-oneoff.sh batch famweather-admin famweather-poller poller -- /usr/local/bin/admin migrate`.
+- Fallback if CI cannot reach the DB: Rodney runs `ops/fly/run-oneoff.sh batch integrated-awn-weather-admin integrated-awn-weather-poller poller -- /usr/local/bin/admin migrate`.
 
 ### 4.5 Single-app layout (rejected)
 
@@ -196,11 +196,11 @@ A single app with two process groups is rejected: Fly secrets are app-wide, so t
 umask 077
 ${EDITOR:-nano} ~/fw-secrets.env                      # KEY=VALUE lines for one app only, mode 0600, OUTSIDE the repo
 ops/ci/check-demo-values.sh ~/fw-secrets.env          # must exit 0 (no local demo values); use an absolute path: the script cd's to the repo root
-fly secrets import -a famweather-poller --stage < ~/fw-secrets.env
+fly secrets import -a integrated-awn-weather-poller --stage < ~/fw-secrets.env
 rm -f ~/fw-secrets.env                                # delete it immediately (macOS has no shred; FileVault covers the disk)
-fly secrets list -a famweather-poller                 # names and digests only
+fly secrets list -a integrated-awn-weather-poller                 # names and digests only
 ```
-`--stage` defers the restart to the next deploy. Verify `fly secrets list -a famweather-api` does not contain `CREDENTIALS_PRIVATE_KEY`.
+`--stage` defers the restart to the next deploy. Verify `fly secrets list -a integrated-awn-weather-api` does not contain `CREDENTIALS_PRIVATE_KEY`.
 
 ### 4.7 Build and deploy invocation (build order: poller first)
 
@@ -211,7 +211,7 @@ flyctl deploy backend --config ops/fly/poller.toml --dockerfile backend/Dockerfi
 flyctl deploy backend --config ops/fly/api.toml    --dockerfile backend/Dockerfile --remote-only --ha=false --image-label sha-<sha12>
 ```
 **Verify in task 1** with `flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --build-only`: if flyctl resolves `--dockerfile` relative to the working-directory argument, change the flag to `--dockerfile Dockerfile` here and in `deploy.yml`. **Default (proposals/02):** each app does its own `--remote-only` build (layers are cached). Optional later improvement, only if someone verifies that an app-scoped deploy token can pull a sibling app's image (proposal 02 fact 6): build once with `flyctl deploy ... --build-only --push` and deploy the same image to the other app with `--image`. Every deploy, rollback and `flyctl config validate` always passes `--config`:
-`flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --image registry.fly.io/famweather-api:sha-<previous> --ha=false`.
+`flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --image registry.fly.io/integrated-awn-weather-api:sha-<previous> --ha=false`.
 
 ## 5. One-off machines (D6)
 
@@ -244,8 +244,8 @@ envargs=()
 while IFS= read -r kv; do envargs+=(-e "$kv"); done < <(jq -r '.config.env // {} | to_entries[] | "\(.key)=\(.value)"' <<<"$cfg")  # mirrors POLLER_ENABLED, RUST_LOG, AWN_MODE, APP_ENV
 name="oneoff-$(date -u +%Y%m%d-%H%M%S)"
 common=(-a "$app" --name "$name" --region "$region" --vm-size shared-cpu-1x --vm-memory 256 --restart no "${envargs[@]}" -e APP_ENV=production)
-if [ "$app" = famweather-admin ]; then
-  # famweather-admin has no config file, so the non-secret SITE_URL (origin printed in set-password links) comes from a committed constant
+if [ "$app" = integrated-awn-weather-admin ]; then
+  # integrated-awn-weather-admin has no config file, so the non-secret SITE_URL (origin printed in set-password links) comes from a committed constant
   site_url="$(tr -d '[:space:]' < "$(dirname "$0")/site-url.txt")"
   [[ "$site_url" =~ ^https://[^/]+$ ]] || { echo "ops/fly/site-url.txt must hold the production origin (https, no path)" >&2; exit 2; }
   common+=(-e "SITE_URL=$site_url")
@@ -274,17 +274,17 @@ fi
 `fly machine wait` and the shape of the exit event in `fly machine status --json` are unverified: confirm in the dry run (task 2) and adjust the `jq`.
 
 Uses (flag names per 04; `admin --help`):
-- Admin shell (uses the poller's image, which contains `admin`; secrets come from `famweather-admin`): `ops/fly/run-oneoff.sh shell famweather-admin famweather-poller poller 15`, then `fly ssh console ... -C "/usr/local/bin/admin add-station"` (API key via hidden prompt only, S7).
-- Invite and reset (shell mode only): `ops/fly/run-oneoff.sh shell famweather-admin famweather-poller poller 15`, then in another terminal `fly ssh console -a famweather-admin --machine <id> --pty -C "/usr/local/bin/admin invite --email <addr> --display-name \"<name>\" --follow-all"` (and `admin reset-link --email <addr>` for a forgotten password). The link is printed once, over the ssh session, so it appears only on Rodney's terminal and never in the machine's stdout/stderr, hence never in `fly logs`; `run-oneoff.sh batch` refuses these two subcommands for that reason. Copy the link straight to the person, never into a ticket or a file. It expires (Email OTP expiration, 3600 s by default), so run the command when the person is ready. Batch mode is fine for `deactivate-user`, `delete-user`, `list-users`, `add-reference-station`, `migrate` (their output holds no secrets).
-- Backfill: `ops/fly/run-oneoff.sh batch famweather-poller famweather-poller poller -- /usr/local/bin/poller run-job awn_backfill --station <uuid>`. Safe to repeat (F3); takes `job:awn_backfill` and the `awn:app:poller` and `awn:key:<credential_id>` rate gates shared with the live poller. The command's own exit code is the script's exit code. Do not run during a poller deploy. Key rotation re-encrypt: same with `run-job credential_reencrypt`.
-- Logs: `fly logs -a <app>` during the run (redacted by code, S7; do not paste into chats). Destroying a stray: `fly machine destroy <id> -a <app> --force`. A leftover machine in `famweather-poller` that runs a scheduler is a duplicate poller; the advisory lock prevents double writes but destroy it.
+- Admin shell (uses the poller's image, which contains `admin`; secrets come from `integrated-awn-weather-admin`): `ops/fly/run-oneoff.sh shell integrated-awn-weather-admin integrated-awn-weather-poller poller 15`, then `fly ssh console ... -C "/usr/local/bin/admin add-station"` (API key via hidden prompt only, S7).
+- Invite and reset (shell mode only): `ops/fly/run-oneoff.sh shell integrated-awn-weather-admin integrated-awn-weather-poller poller 15`, then in another terminal `fly ssh console -a integrated-awn-weather-admin --machine <id> --pty -C "/usr/local/bin/admin invite --email <addr> --display-name \"<name>\" --follow-all"` (and `admin reset-link --email <addr>` for a forgotten password). The link is printed once, over the ssh session, so it appears only on Rodney's terminal and never in the machine's stdout/stderr, hence never in `fly logs`; `run-oneoff.sh batch` refuses these two subcommands for that reason. Copy the link straight to the person, never into a ticket or a file. It expires (Email OTP expiration, 3600 s by default), so run the command when the person is ready. Batch mode is fine for `deactivate-user`, `delete-user`, `list-users`, `add-reference-station`, `migrate` (their output holds no secrets).
+- Backfill: `ops/fly/run-oneoff.sh batch integrated-awn-weather-poller integrated-awn-weather-poller poller -- /usr/local/bin/poller run-job awn_backfill --station <uuid>`. Safe to repeat (F3); takes `job:awn_backfill` and the `awn:app:poller` and `awn:key:<credential_id>` rate gates shared with the live poller. The command's own exit code is the script's exit code. Do not run during a poller deploy. Key rotation re-encrypt: same with `run-job credential_reencrypt`.
+- Logs: `fly logs -a <app>` during the run (redacted by code, S7; do not paste into chats). Destroying a stray: `fly machine destroy <id> -a <app> --force`. A leftover machine in `integrated-awn-weather-poller` that runs a scheduler is a duplicate poller; the advisory lock prevents double writes but destroy it.
 
 ## 6. Scheduled backup machine (Fly)
 
 `ops/backup/fly.toml` (no `[processes]`, no `[[restart]]`, no `[env]`: the image `ENTRYPOINT` is the script, the machine is created with `--restart no`, and a toml `[env]` is **not** applied to machines created with `fly machine run`, so env is passed with `-e` below):
 
 ```toml
-app = "famweather-backup"
+app = "integrated-awn-weather-backup"
 primary_region = "sjc"
 ```
 
@@ -294,38 +294,38 @@ Create once (Rodney), after the app exists (runbook step 5 creates all four apps
 
 ```bash
 flyctl deploy . --config ops/backup/fly.toml --dockerfile ops/backup/Dockerfile --build-only --push --image-label sha-<sha12>
-fly machine run registry.fly.io/famweather-backup:sha-<sha12> -a famweather-backup \
+fly machine run registry.fly.io/integrated-awn-weather-backup:sha-<sha12> -a integrated-awn-weather-backup \
   --name backup-daily --region sjc --schedule daily --restart no --vm-size shared-cpu-1x --vm-memory 256 \
   -e AWS_DEFAULT_REGION=us-west-2 -e BACKUP_S3_PREFIX=weather
 ```
 
-Update on change (CI does this, 11.4, and **skips it when no machine exists yet**, i.e. on the first deploy): `fly machine update <id> --image registry.fly.io/famweather-backup:sha-<sha12> -a famweather-backup --yes` (verify that it keeps the schedule and the `-e` env; Open question 10). On demand: `fly machine start <id> -a famweather-backup`. Docs: [task scheduling](https://fly.io/docs/blueprints/task-scheduling/), [fly machine run](https://fly.io/docs/machines/flyctl/fly-machine-run/).
+Update on change (CI does this, 11.4, and **skips it when no machine exists yet**, i.e. on the first deploy): `fly machine update <id> --image registry.fly.io/integrated-awn-weather-backup:sha-<sha12> -a integrated-awn-weather-backup --yes` (verify that it keeps the schedule and the `-e` env; Open question 10). On demand: `fly machine start <id> -a integrated-awn-weather-backup`. Docs: [task scheduling](https://fly.io/docs/blueprints/task-scheduling/), [fly machine run](https://fly.io/docs/machines/flyctl/fly-machine-run/).
 
 ## 7. Supabase production checklist (Rodney)
 
 Reference 04 for SQL and 04's hosted-verification items. Tick each in order.
 
-1. Create the project (free plan) in the chosen region. Generate a long DB password; store it in the password manager only. The `postgres` password is used only for steps 8 and 9 and emergencies; never put it on Fly or GitHub.
-1b. **CA certificate:** Database settings → SSL configuration → download the CA certificate; commit it as `backend/certs/supabase-ca.crt` (public certificate). 02's Dockerfile copies `backend/certs/` to `/etc/ssl/app-certs/` (so the file lands at `/etc/ssl/app-certs/supabase-ca.crt`); the backup image copies the same directory. Builds work before this step because `backend/certs/.keep` is committed, but production config refuses to start without the file, so do it before the first production deploy.
+1. Create the project (free plan) with **Specific region → West US (North California), `us-west-1`** (section 4.1; not the general "Americas" choice). Generate a long DB password; store it in the password manager only. The `postgres` password is used only for steps 8 and 9 and emergencies; never put it on Fly or GitHub.
+1b. **CA certificate:** Database → Settings → SSL Configuration → download the CA certificate; commit it as `backend/certs/supabase-ca.crt` (public certificate). 02's Dockerfile copies `backend/certs/` to `/etc/ssl/app-certs/` (so the file lands at `/etc/ssl/app-certs/supabase-ca.crt`); the backup image copies the same directory. Builds work before this step because `backend/certs/.keep` is committed, but production config refuses to start without the file, so do it before the first production deploy.
 2. Supabase account MFA (S16; GitHub 2FA too) ([Supabase MFA](https://supabase.com/docs/guides/platform/multi-factor-authentication)).
 3. Auth → Sign In / Providers: **disable "Allow new users to sign up"**; **disable anonymous sign-ins**; Email provider **on** (this is what enables password sign-in; login is email + password, proposals/05); all social and phone providers off; "Confirm email" on (S4). Set **Email OTP expiration** to 3600 seconds (it is the lifetime of the set-password and reset links; up to 86400 is allowed if family members need longer).
 4. Auth → URL Configuration: Site URL = the Netlify production URL (the Netlify site already exists, runbook step 2). **Redirect URLs: leave empty** (decided Oct 7: no flow uses a redirect; password sign-in and `verifyOtp` are direct calls, so Netlify deploy previews sign in without any allow-list entry and the earlier preview wildcard is gone).
 5. **Password settings check (required, proposal 05; you set these while creating the project, nothing is verified beforehand):** in the dashboard find and set each of these, and write what you found in the setup notes (04 section 8.1 lists the same intent):
-   - **Secure password change / reauthentication by email: Off.** If it is on, a signed-in person with a session older than 24 hours cannot change their password without an emailed nonce, and nothing can send email.
-   - **Require current password when changing it: Off.** If it is on, a password change from a normal signed-in session (the `/account` form) is refused with `current_password_required` (it does not affect set-password links, verified on GoTrue v2.197.0). If it cannot be turned off, the fallback is that the `/account` change-password flow must send the current password (01 must then add that field), not proposal 05 option (b1).
+   - **Require reauthentication when changing password: Off** (older name "Secure password change"; Email provider settings, [password security](https://supabase.com/docs/guides/auth/password-security)). If it is on, a signed-in person with a session older than 24 hours cannot change their password without an emailed nonce, and nothing can send email.
+   - **Require current password when changing password: Off.** If it is on, a password change from a normal signed-in session (the `/account` form) is refused with `current_password_required` (it does not affect set-password links, verified on GoTrue v2.197.0). If it cannot be turned off, the fallback is that the `/account` change-password flow must send the current password (01 must then add that field), not proposal 05 option (b1).
    - **Minimum password length: 12** (Auth → Sign In / Providers → Email, or Password security), and note whether leaked-password protection is available (Pro only; expected not available).
    - **If either switch cannot be turned off on the free plan, stop and tell the coding agent:** the fallback is proposal 05 option (b1) (a temporary password handed over by Rodney and a "change your password" prompt; `admin invite` then sets an initial random password instead of printing a link). If the minimum length cannot be raised, the web form and `admin` keep the 12-character rule and the gap is written into the security notes (04 section 8.1).
    - Auth → SMTP: **leave custom SMTP unconfigured** (decided Oct 7: nothing in the product sends email; family members get set-password links from `admin invite` / `admin reset-link`, sent by hand). Do not add an email provider or SES now. **Growth path (documented, not built):** if the family grows beyond a few people, configure custom SMTP (Amazon SES is acceptable then: a verified sender domain with SPF/DKIM and production access out of the SES sandbox, [Supabase SMTP](https://supabase.com/docs/guides/auth/auth-smtp)), point the recovery and invite email templates at `https://<site>/set-password#token_hash={{ .TokenHash }}&type=recovery`, and ask the coding agent for the small code paths (04 section 8.1a). The built-in sender only delivers to organization members at about 2 messages per hour, so it is not an option for family.
-6. Settings → JWT Keys ([signing keys](https://supabase.com/docs/guides/auth/signing-keys)): migrate to asymmetric signing keys (ES256) and make the new key current. **Keep the legacy HS256 secret until the Stage B JWKS check passes** (runbook step 14). Revocation order then: first **disable the legacy `anon`/`service_role` API keys** (API Keys settings, legacy tab), then revoke the legacy JWT secret, then re-run smoke. Access-token expiry 3600 s. `SUPABASE_JWKS_URL = ${SUPABASE_URL}/auth/v1/.well-known/jwks.json`.
-7. Data API (S6): **disable the Data API** (the app never uses PostgREST). If it cannot be disabled, expose no schemas except an empty `public`, and confirm `app` and `app_auth` are not exposed.
-8. **API keys:** use the new-style keys. `PUBLIC_SUPABASE_ANON_KEY` = the `sb_publishable_...` key (public by design). `SUPABASE_SERVICE_ROLE_KEY` = the `sb_secret_...` key, sent as the `apikey` header by the admin client; it goes **only** into `famweather-admin` secrets, never GitHub or Netlify. It must be sent only in the `apikey` header, never as an `Authorization: Bearer` token (it is not a JWT; 04 must make the admin client do this). The legacy anon/service_role JWT keys are disabled, then the legacy secret revoked, per step 6.
+6. Project Settings → JWT Signing Keys ([signing keys](https://supabase.com/docs/guides/auth/signing-keys)): projects created now already sign with an ES256 (P-256) key, so there is nothing to migrate (verified Nov 1, 2026: the project's JWKS lists one `EC`/`ES256` key; the "Migrate JWT secret" flow in the docs applies only to older projects). Just confirm the current key is the elliptic-curve one. **Keep the legacy HS256 secret until the Stage B JWKS check passes** (runbook step 14). Revocation order then ([API keys](https://supabase.com/docs/guides/api/api-keys)): first **disable the legacy `anon`/`service_role` API keys** (API Keys, legacy tab), move the legacy secret to "Previously used", wait at least 1 h 15 min (token lifetime plus margin), then revoke it, then re-run smoke. Key changes are throttled (about 5 minutes between changes). Access-token expiry 3600 s. `SUPABASE_JWKS_URL = ${SUPABASE_URL}/auth/v1/.well-known/jwks.json`.
+7. Integrations → Data API (S6, [hardening the Data API](https://supabase.com/docs/guides/database/hardening-data-api)): turn **off** "Enable Data API" (the app never uses PostgREST). If it cannot be disabled, expose no schemas except an empty `public`, and confirm `app` and `app_auth` are not exposed.
+8. **API keys:** use the new-style keys. `PUBLIC_SUPABASE_ANON_KEY` = the `sb_publishable_...` key (public by design). `SUPABASE_SERVICE_ROLE_KEY` = the `sb_secret_...` key, sent as the `apikey` header by the admin client; it goes **only** into `integrated-awn-weather-admin` secrets, never GitHub or Netlify. It must be sent only in the `apikey` header, never as an `Authorization: Bearer` token (it is not a JWT; 04 must make the admin client do this). The legacy anon/service_role JWT keys are disabled, then the legacy secret revoked, per step 6.
 9. **Roles (04):** from a trusted shell. Connection: 04 specifies the direct connection for `roles.sql`; the direct host is IPv6-only, so on an IPv4-only network use the **session pooler** instead (same SQL; user `postgres.<ref>`; copy the pooler hostname from the dashboard Connect panel). 04 should mention the pooler alternative (see "Changes other guides must make").
    - Generate five passwords (`openssl rand -hex 24`, URL-safe). Plaintext appears only inside the role-specific `DATABASE_URL`s you will store as secrets; the bootstrap receives **SCRAM verifiers**:
      `export APP_MIGRATOR_PASSWORD_VERIFIER="$(printf '%s\n' "$APP_MIGRATOR_PW" | python3 ops/db/bootstrap/scram.py)"` and the same for `APP_API_`, `APP_POLLER_`, `APP_BACKUP_`, `APP_CI_CHECK_PASSWORD_VERIFIER`.
    - The `postgres` password is never on the command line or in the URL: let `psql` prompt for it, or use a temporary `PGPASSFILE` (mode 0600, deleted afterwards). Never use the dashboard SQL editor (its history stores statements).
    - `psql -X -v ON_ERROR_STOP=1 -f ops/db/bootstrap/roles.sql "postgresql://postgres.<ref>@<pooler-host>:5432/postgres?sslmode=verify-full&sslrootcert=backend/certs/supabase-ca.crt"` (direct: `postgresql://postgres@db.<ref>.supabase.co:5432/postgres?...`).
    - Then, **only after the proposal-03 scratch-project checklist (runbook 15.1 step 0) has passed**, run `ops/db/bootstrap/auth_access.sql` the same way as `postgres`. Record the outcome in 04 section 6.5. Unset the exported variables and remove any PGPASSFILE afterwards.
-10. Database → Settings: **Enforce SSL on incoming connections = on**.
+10. Database → Settings → SSL Configuration: **Enforce SSL on incoming connections = on** (restarts the database for a few seconds; [SSL enforcement](https://supabase.com/docs/guides/platform/ssl-enforcement)).
 11. Connection strings: Fly roles: `postgresql://<role>:<pw>@db.<ref>.supabase.co:5432/postgres?sslmode=verify-full&sslrootcert=/etc/ssl/app-certs/supabase-ca.crt`. CI migrator and exposure check: `postgresql://app_migrator.<ref>:<pw>@<pooler-host>:5432/postgres?sslmode=verify-full` and the same for `app_ci_check.<ref>` (CI appends `&sslrootcert=<path>`). Backup: `app_backup` direct URL.
 12. After step 11 and after any Supabase settings change run `ops/db/checks/supabase_smoke.sh` and `ops/db/checks/exposure.sh <app_ci_check url>`; both must exit 0.
 13. Free-plan facts to re-verify at setup ([billing](https://supabase.com/docs/guides/platform/billing-on-supabase)): 500 MB database (read-only above it), inactivity pause after about 1 week, no managed backups (hence section 9), 5 GB egress, built-in SMTP limits. **Upgrade to Pro (about $25/month) when** the size alert fires at 400 MB, a pause warning arrives, or the poller finds the project paused (C2). Size alerting is done by the backup job (9.3), not by Supabase.
@@ -340,7 +340,7 @@ Reference 04 for SQL and 04's hosted-verification items. Tick each in order.
 - 2FA on the Netlify account (S16).
 - Before the first Netlify build, the real Supabase project ref must be committed in `web/security-headers.json` (CSP `connect-src`) and `web/netlify.toml` regenerated with `node web/scripts/headers.mjs generate` (Stage B, runbook step 13); otherwise 01's check and the build fail on the `<project-ref>` placeholder.
 - Environment variables, per 01-web: only `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY` (Builds scope) plus `NODE_VERSION` in the toml. Nothing secret starts with `PUBLIC_` (S14).
-- Optional signed proxy (S3), **off for the first deploy**: conventions keep `signed = "NETLIFY_PROXY_SECRET"` commented out until enabled together with the API secret. To enable: create `NETLIFY_PROXY_SECRET` with scope **Runtime only** and "contains secret value" (same value as the Fly secret), uncomment the line, redeploy Netlify, set the secret on `famweather-api`. It is not available to builds, so it cannot reach the bundle. The toml names the variable only; no secret is in the repo.
+- Optional signed proxy (S3), **off for the first deploy**: conventions keep `signed = "NETLIFY_PROXY_SECRET"` commented out until enabled together with the API secret. To enable: create `NETLIFY_PROXY_SECRET` with scope **Runtime only** and "contains secret value" (same value as the Fly secret), uncomment the line, redeploy Netlify, set the secret on `integrated-awn-weather-api`. It is not available to builds, so it cannot reach the bundle. The toml names the variable only; no secret is in the repo.
 - Custom domain optional; if used, update the Supabase Site URL and the admin app's `SITE_URL` (there is no callback allow-list any more).
 
 ### 8.2 `web/netlify.toml` (headers generated by `web/scripts/headers.mjs generate` from `web/security-headers.json`)
@@ -350,7 +350,7 @@ Reference 04 for SQL and 04's hosted-verification items. Tick each in order.
 ```toml
 [[redirects]]
   from = "/api/*"
-  to = "https://<fly-app>.fly.dev/api/:splat"     # <fly-app> = `app` in ops/fly/api.toml (famweather-api)
+  to = "https://<fly-app>.fly.dev/api/:splat"     # <fly-app> = `app` in ops/fly/api.toml (integrated-awn-weather-api)
   status = 200
   force = true
   # signed = "NETLIFY_PROXY_SECRET"               # commented out for the first deploy (8.1)
@@ -479,7 +479,7 @@ The `DBSIZE` healthchecks check expects a daily success ping; `size.sql` raising
   ]
 }
 ```
-4. IAM user `famweather-backup-uploader`: no console access, one access key, inline policy. **No SSE condition** (the bucket default encryption applies, and a condition would break any request that does not send the header; the script sends `--server-side-encryption AES256` anyway). No multipart actions are needed: the script uses a single `put-object` (dumps are far below 5 GB).
+4. IAM user `integrated-awn-weather-backup-uploader`: no console access, one access key, inline policy. **No SSE condition** (the bucket default encryption applies, and a condition would break any request that does not send the header; the script sends `--server-side-encryption AES256` anyway). No multipart actions are needed: the script uses a single `put-object` (dumps are far below 5 GB).
 ```json
 {
   "Version": "2012-10-17",
@@ -950,30 +950,30 @@ All dashboards MFA (S16). "Readable by" assumes Rodney is the only human admin.
 
 | Secret | Lives in | Readable by | Rotation |
 | --- | --- | --- | --- |
-| `CREDENTIALS_PRIVATE_KEY` (HPKE) | Fly secret `famweather-poller`; offline copy in password manager | poller machine, Rodney | R1 |
+| `CREDENTIALS_PRIVATE_KEY` (HPKE) | Fly secret `integrated-awn-weather-poller`; offline copy in password manager | poller machine, Rodney | R1 |
 | `CREDENTIALS_PUBLIC_KEY`, `CREDENTIALS_KEY_VERSION` | Fly secrets api, admin (version also poller) | those apps (public value) | with R1 |
 | `AWN_APPLICATION_KEY` | Fly secrets api, poller; password manager | those machines | R2 |
 | `app_api` / `app_poller` / `app_migrator` / `app_backup` / `app_ci_check` passwords | Fly secrets inside each `DATABASE_URL` (api / poller / admin / backup); `app_migrator` and `app_ci_check` URLs also in GitHub env `production`; password manager | the respective app or workflow | R3 |
 | `postgres` password | password manager only | Rodney | change in the dashboard; unused by apps |
 | Supabase JWT signing keys | Supabase | Supabase | R4 |
 | `sb_publishable_` key (`PUBLIC_SUPABASE_ANON_KEY`) | Netlify env (public by design) | anyone | R4 |
-| `sb_secret_` key (`SUPABASE_SERVICE_ROLE_KEY`) | Fly secret `famweather-admin` only | admin one-off machines | R4 |
+| `sb_secret_` key (`SUPABASE_SERVICE_ROLE_KEY`) | Fly secret `integrated-awn-weather-admin` only | admin one-off machines | R4 |
 | `NETLIFY_PROXY_SECRET` (same value both places) | Fly secret api + Netlify runtime env (optional) | api, Netlify | R5 |
 | (no Netlify credential) | web is published by a fast-forward push to the `production` branch using the `publish-web` job's short-lived `GITHUB_TOKEN` (`contents: write`) | the `publish-web` job (after `deploy` was approved) | R9 |
 | Fly deploy tokens (api/poller/backup) | GitHub env `production` | workflows on `main` after approval | R6 |
 | `MIGRATOR_DATABASE_URL`, `EXPOSURE_DATABASE_URL` | GitHub env `production` | workflows on `main` after approval | R3 |
-| AWS uploader key | Fly secret `famweather-backup` | backup machine | R7 |
+| AWS uploader key | Fly secret `integrated-awn-weather-backup` | backup machine | R7 |
 | AWS restore identity | Rodney (MFA) | Rodney | n/a |
 | age private key | offline (password manager + physical copy) | Rodney | R8 |
 | `BACKUP_AGE_RECIPIENT` | Fly secret backup | public value | with R8 |
 | healthchecks ping URLs | Fly secrets poller/backup | holder can fake pings | regenerate in healthchecks, `fly secrets set` |
 
 Rotation:
-- **R1 HPKE (S8):** 1) `admin keygen` offline; 2) on the poller set `CREDENTIALS_PRIVATE_KEY_PREVIOUS` = old, `CREDENTIALS_KEY_VERSION_PREVIOUS` = n, `CREDENTIALS_PRIVATE_KEY` = new, `CREDENTIALS_KEY_VERSION` = n+1; 3) set `CREDENTIALS_PUBLIC_KEY` = new and `CREDENTIALS_KEY_VERSION` = n+1 on api and admin; `admin keygen --check` the new pair; deploy; 4) `ops/fly/run-oneoff.sh batch famweather-poller famweather-poller poller -- /usr/local/bin/poller run-job credential_reencrypt`; verify no `key_version` < n+1 (Rodney, Supabase SQL editor); 5) **unset the `*_PREVIOUS` secrets on Fly only; the old private key stays offline in the password manager** until the oldest backup that used version n has aged out (retention), then destroy it.
+- **R1 HPKE (S8):** 1) `admin keygen` offline; 2) on the poller set `CREDENTIALS_PRIVATE_KEY_PREVIOUS` = old, `CREDENTIALS_KEY_VERSION_PREVIOUS` = n, `CREDENTIALS_PRIVATE_KEY` = new, `CREDENTIALS_KEY_VERSION` = n+1; 3) set `CREDENTIALS_PUBLIC_KEY` = new and `CREDENTIALS_KEY_VERSION` = n+1 on api and admin; `admin keygen --check` the new pair; deploy; 4) `ops/fly/run-oneoff.sh batch integrated-awn-weather-poller integrated-awn-weather-poller poller -- /usr/local/bin/poller run-job credential_reencrypt`; verify no `key_version` < n+1 (Rodney, Supabase SQL editor); 5) **unset the `*_PREVIOUS` secrets on Fly only; the old private key stays offline in the password manager** until the oldest backup that used version n has aged out (retention), then destroy it.
 - **R2 AWN application key:** create a new key in AWN; `fly secrets set` on api and poller (staged), deploy both; watch `awn_ingest`; delete the old key.
 - **R3 DB role password:** from a trusted shell as `postgres` (direct or session pooler as in 7 step 9, password via the `psql` prompt or a temporary `PGPASSFILE`, never on the command line): `psql ...` then `\password app_x` (psql hashes client-side; nothing lands in dashboard SQL history; **do not use the SQL editor**). Update the Fly secret or GitHub environment secret immediately, deploy or restart that app, verify the healthcheck. A brief reconnect window is acceptable (poller catches up). Applies to all five roles including `app_ci_check`. Update the offline record.
-- **R4 Supabase keys:** signing key: create the standby key, rotate (new tokens carry the new `kid`), keep the old key "previously used" for at least the access-token lifetime plus refresh window, then revoke; the API refetches JWKS on an unknown `kid` (02). Secret key (`sb_secret_`): regenerate, `fly secrets set -a famweather-admin`. Publishable key rotation needs a Netlify env change and rebuild.
-- **R5 Proxy secret:** set the new value on Netlify (runtime env) and on Fly `famweather-api`; expect a few minutes of 403 unless 02 accepts two values; trigger a redeploy of the `production` branch in the Netlify UI (Deploys, Trigger deploy).
+- **R4 Supabase keys:** signing key: create the standby key, rotate (new tokens carry the new `kid`), keep the old key "previously used" for at least the access-token lifetime plus refresh window, then revoke; the API refetches JWKS on an unknown `kid` (02). Secret key (`sb_secret_`): regenerate, `fly secrets set -a integrated-awn-weather-admin`. Publishable key rotation needs a Netlify env change and rebuild.
+- **R5 Proxy secret:** set the new value on Netlify (runtime env) and on Fly `integrated-awn-weather-api`; expect a few minutes of 403 unless 02 accepts two values; trigger a redeploy of the `production` branch in the Netlify UI (Deploys, Trigger deploy).
 - **R9 Web publish right (no Netlify credential, proposals/04):** the only way to publish the site from CI is pushing the `production` branch. Leak impact: anyone with repo write (or a compromised `deploy` job) can publish a chosen commit; the controls are the `production` GitHub environment approval, GitHub MFA and a ruleset that only blocks deletion and force pushes (it cannot restrict who updates the branch without blocking the workflow; it is enforced because the repo is public). Nothing to rotate. Only if the pre-build Netlify test fails and option (e) or (b) is used does a Netlify token appear (scope it to a user who sees only this site, add it to the `production` environment, and rotate like a deploy token).
 - **R6 Fly deploy token:** `fly tokens create deploy -a <app>`, update the GitHub environment secret, `fly tokens revoke <id>` the old one.
 - **R7 AWS key:** create a second access key, `fly secrets set` on backup, run a manual backup, deactivate then delete the old key.
@@ -1067,20 +1067,20 @@ Manual checks (Rodney; they touch Supabase Auth or production machines, so agent
 
 | # | Check | Command / action | Expected |
 | --- | --- | --- | --- |
-| 1 | Direct fly.dev requires auth | `ops/ci/smoke.sh` and `curl -i https://famweather-api.fly.dev/api/v1/stations` | 401/403, never data |
-| 2 | Signed proxy (**only after enabling it, 8.1**) | `curl -i -H 'x-nf-sign: junk' https://famweather-api.fly.dev/api/v1/me`; **positive:** `curl -i https://<site>/api/v1/me` | direct: 403; through Netlify: 401 (proves the proxy signs correctly; a 403 means signing is misconfigured) |
-| 3 | Health exempt | `curl -i https://famweather-api.fly.dev/api/health` | 200, no data |
+| 1 | Direct fly.dev requires auth | `ops/ci/smoke.sh` and `curl -i https://integrated-awn-weather-api.fly.dev/api/v1/stations` | 401/403, never data |
+| 2 | Signed proxy (**only after enabling it, 8.1**) | `curl -i -H 'x-nf-sign: junk' https://integrated-awn-weather-api.fly.dev/api/v1/me`; **positive:** `curl -i https://<site>/api/v1/me` | direct: 403; through Netlify: 401 (proves the proxy signs correctly; a 403 means signing is misconfigured) |
+| 3 | Health exempt | `curl -i https://integrated-awn-weather-api.fly.dev/api/health` | 200, no data |
 | 4 | Headers on HTML and assets | smoke.sh | present on `/`; `/_app/immutable/*` immutable; API responses `no-store` |
 | 5 | Deployed CSP hash | `node ops/ci/check-deployed-csp.mjs` (in smoke) | inline scripts covered by the meta; Netlify snippet injection and post-processing are off |
 | 6 | Sign-up disabled | `curl -s -X POST "$SUPABASE_URL/auth/v1/signup" -H "apikey: $PUBLISHABLE" -H 'Content-Type: application/json' -d '{"email":"probe+delete-me@example.invalid","password":"<random 24 chars>"}'`; and with body `{}` | first: `signup_disabled`; second: `anonymous_provider_disabled` or `signup_disabled`. If any returns a user, delete that user in the dashboard immediately and fix settings |
 | 7 | Data API does not expose `app` | `curl -s -o /dev/null -w '%{http_code}' "$SUPABASE_URL/rest/v1/credentials" -H "apikey: $PUBLISHABLE" -H 'Accept-Profile: app'` (and without the header) | not 200; no rows |
 | 8 | Publishable key is not a login | `curl -i -H "Authorization: Bearer $PUBLISHABLE" https://<site>/api/v1/me` | 401 |
-| 9 | Machine counts | `fly machines list -a famweather-poller` and `-a famweather-api` | exactly 1 each |
-| 10 | Key isolation | `fly secrets list -a famweather-api` | no `CREDENTIALS_PRIVATE_KEY`, no `SUPABASE_SERVICE_ROLE_KEY`, no poller DB URL |
-| 11 | Poller lock prevents duplicates | `ops/fly/run-oneoff.sh batch famweather-poller famweather-poller poller -- /usr/local/bin/poller` (the script mirrors `POLLER_ENABLED=true`; batch mode blocks while the scheduler runs, so run it in a second terminal and stop it with Ctrl-C, whose trap destroys the machine), then `fly logs -a famweather-poller`, then **destroy that machine**: `fly machines list -a famweather-poller`, `fly machine destroy <oneoff-id> -a famweather-poller --force` | the second instance logs lock-held and writes nothing; **no job has two `running` rows**: in the Supabase SQL editor `select job, count(*) from app.job_runs where status='running' group by 1 having count(*)>1` returns 0 rows |
+| 9 | Machine counts | `fly machines list -a integrated-awn-weather-poller` and `-a integrated-awn-weather-api` | exactly 1 each |
+| 10 | Key isolation | `fly secrets list -a integrated-awn-weather-api` | no `CREDENTIALS_PRIVATE_KEY`, no `SUPABASE_SERVICE_ROLE_KEY`, no poller DB URL |
+| 11 | Poller lock prevents duplicates | `ops/fly/run-oneoff.sh batch integrated-awn-weather-poller integrated-awn-weather-poller poller -- /usr/local/bin/poller` (the script mirrors `POLLER_ENABLED=true`; batch mode blocks while the scheduler runs, so run it in a second terminal and stop it with Ctrl-C, whose trap destroys the machine), then `fly logs -a integrated-awn-weather-poller`, then **destroy that machine**: `fly machines list -a integrated-awn-weather-poller`, `fly machine destroy <oneoff-id> -a integrated-awn-weather-poller --force` | the second instance logs lock-held and writes nothing; **no job has two `running` rows**: in the Supabase SQL editor `select job, count(*) from app.job_runs where status='running' group by 1 having count(*)>1` returns 0 rows |
 | 12 | DB TLS verify-full | first connectivity test from the backup image | connects with `sslmode=verify-full` |
 | 13 | Heartbeats | healthchecks.io | all green within one period |
-| 14 | Invite and login end to end | `ops/fly/run-oneoff.sh shell famweather-admin famweather-poller poller 15`, then `fly ssh console -a famweather-admin --machine <id> --pty -C "/usr/local/bin/admin invite --email <test address> --display-name test"` (shell mode only, so the link is not in `fly logs`); open the printed set-password link **on the deployed site**, choose a password and sign in; sign out and sign in again with it; run `admin reset-link --email <test address>` and set a new password from that link without the old one (this proves the two password-change settings of section 7 step 5); **clean up:** `admin deactivate-user` then `admin delete-user` for it | no email is sent or expected (none is configured); the link opens `https://<site>/set-password`; both password changes work; the test user is removed |
+| 14 | Invite and login end to end | `ops/fly/run-oneoff.sh shell integrated-awn-weather-admin integrated-awn-weather-poller poller 15`, then `fly ssh console -a integrated-awn-weather-admin --machine <id> --pty -C "/usr/local/bin/admin invite --email <test address> --display-name test"` (shell mode only, so the link is not in `fly logs`); open the printed set-password link **on the deployed site**, choose a password and sign in; sign out and sign in again with it; run `admin reset-link --email <test address>` and set a new password from that link without the old one (this proves the two password-change settings of section 7 step 5); **clean up:** `admin deactivate-user` then `admin delete-user` for it | no email is sent or expected (none is configured); the link opens `https://<site>/set-password`; both password changes work; the test user is removed |
 | 15 | Backup restores, S3 policy | section 15.6 drill; attempt to re-upload an existing key and a `put-object` without `--if-none-match` using the uploader key | restore succeeds; re-uploading an existing key with `--if-none-match '*'` returns **412** (PreconditionFailed); a `put-object` without the header returns **403** (bucket policy) |
 | 16 | Weekly hygiene | `supabase_smoke.sh` needs the API keys and stays a manual weekly calendar item. `exposure.sh`: the repo is public (decided Oct 7) and minutes are free, so a scheduled workflow `.github/workflows/exposure-weekly.yml` (`on: schedule` weekly plus `workflow_dispatch`, `environment: ci-readonly`, an environment **without required reviewers** that holds only `EXPOSURE_DATABASE_URL`, i.e. the `app_ci_check` URL with no table grants) runs it; GitHub disables scheduled workflows in public repos after 60 days without repository activity, so if the weekly run stops, re-enable it in the Actions tab (11.5) | exit 0 |
 | 17 | Exposure and Supabase smoke | `ops/db/checks/exposure.sh` as `app_ci_check`; `ops/db/checks/supabase_smoke.sh` | exit 0 |
@@ -1124,11 +1124,11 @@ Stage A (phase 2: the poller goes live early because history cannot be rebuilt):
 9. `admin invite --email <you> --display-name <you> --admin --follow-all` for Rodney, in Stage A, so his station has an owner (the website is not live yet, so ignore the printed link; issue a fresh `admin reset-link --email <you>` at step 13 when the site is up) (`shell` mode via `fly ssh console -C`, never `batch`, so the link stays out of `fly logs`; section 5), then the family.
 10. `admin add-reference-station` for each baseline station.
 11. Stations: `admin add-station` via the interactive `shell` mode (dry-run first, section 5) or, if that fails, through the web connect flow after Stage B.
-12. Run `awn_backfill` once per station via `run-oneoff.sh batch famweather-poller famweather-poller poller -- /usr/local/bin/poller run-job awn_backfill --station <uuid>` (history ages out of Ambient, so do this at go-live), then watch `awn_ingest` go green.
+12. Run `awn_backfill` once per station via `run-oneoff.sh batch integrated-awn-weather-poller integrated-awn-weather-poller poller -- /usr/local/bin/poller run-job awn_backfill --station <uuid>` (history ages out of Ambient, so do this at go-live), then watch `awn_ingest` go green.
 
 Stage B (API and web):
 13. When 02 and 01 have shipped: **commit the real Supabase project ref into `web/security-headers.json`, run `node web/scripts/headers.mjs generate`, and fill `<project-ref>` in `SUPABASE_URL` and `SUPABASE_JWKS_URL` in `ops/fly/api.toml`** so `web/netlify.toml` has the right `connect-src` before the first Netlify build; set the Netlify variables `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY` (here, not in Stage A: the site cannot build before the ref is filled in), set the API secrets, create the remaining healthchecks, set repo variables `DEPLOY_API=true`, `DEPLOY_WEB=true` and `SITE_URL`, create the GitHub ruleset on the Git branch `production` (block deletion and non-fast-forward pushes only, no "restrict updates" rule; GitHub MFA on; it is enforced because the repo is public); re-run the deploy workflow (after the API deploy the `publish-web` job fast-forwards `production`, Netlify builds and publishes, and the workflow waits for `/version.txt` to equal the commit SHA); verify checks 1 to 10 of section 13.
-14. **JWKS check:** log in through the site and confirm `/api/v1/me` returns 200 with the new asymmetric key. Only then, in this order: disable the legacy `anon`/`service_role` API keys, revoke the legacy HS256 secret, re-run smoke and checks 6 to 8.
+14. **JWKS check:** log in through the site and confirm `/api/v1/me` returns 200 with the new asymmetric key. Only then, in this order: disable the legacy `anon`/`service_role` API keys, move the legacy HS256 secret to "Previously used", wait at least 1 h 15 min, revoke it, re-run smoke and checks 6 to 8.
 15. Enable the signed proxy when desired (8.1) and run check 2. Perform the first restore drill (15.6). Record results.
 
 Done when: all section 13 checks pass, all healthchecks stay green for 24 h, a restore drill succeeded.
@@ -1139,9 +1139,9 @@ Done when: all section 13 checks pass, all healthchecks stay green for 24 h, a r
 3. Run `awn_backfill` for the gap. Many simultaneous failures suggest an AWN outage or a changed application key; check AWN status first.
 
 ### 15.3 Poller stalled
-1. Healthchecks email; `fly status -a famweather-poller`, `fly logs -a famweather-poller`.
+1. Healthchecks email; `fly status -a integrated-awn-weather-poller`, `fly logs -a integrated-awn-weather-poller`.
 2. Stopped or crash-looping: `fly machine restart <id>`; if the image is bad, redeploy the previous one with `--config` (4.7).
-3. Running but silent: suspect a stuck advisory lock or a stray one-off: `fly machines list -a famweather-poller`, destroy strays, restart the poller (locks release on disconnect).
+3. Running but silent: suspect a stuck advisory lock or a stray one-off: `fly machines list -a integrated-awn-weather-poller`, destroy strays, restart the poller (locks release on disconnect).
 4. DB unreachable: check Supabase paused or limits (15.4), IPv6 or `verify-full` errors in logs.
 5. Confirm catch-up in `job_runs`; run `awn_backfill` for gaps longer than the catch-up horizon.
 
@@ -1165,7 +1165,7 @@ Target: the **drill** restores into a local Compose database **on Rodney's lapto
 2. Decrypt with the offline key: `age -d -i weather-backup.key -o app.dump app-<ts>-<rand>.dump.age` and `age -d -i weather-backup.key -o auth-users.csv auth-users-<ts>-<rand>.csv.age`. Delete decrypted files after the drill (step 9).
 3. Find the dump's migration version: `pg_restore --data-only --table=_sqlx_migrations -f - app.dump` (highest `version`). Check out the repo commit whose `backend/migrations/` ends at that version (`git log` on that migration file).
 4. Prepare the target in production order. Local Compose: `docker compose up -d db auth`, then the `auth-access` one-shot (`docker compose run --rm auth-access`, which runs `ops/db/bootstrap/auth_access.sql` as `postgres` after GoTrue created `auth`; 05's role init alone is not enough), then `docker compose run --rm migrate` pinned to the checked-out commit from step 3. New Supabase project: `roles.sql`, then `auth_access.sql` as `postgres` (7, step 9), then `admin migrate` as `app_migrator`. The schema now matches the dump.
-5. Restore data only, as `app_migrator` (so ownership stays correct), skipping the migrations table: `pg_restore -l app.dump | grep -v _sqlx_migrations > list.txt` then `pg_restore --data-only --single-transaction --use-list list.txt --dbname "$TARGET_URL_AS_APP_MIGRATOR" app.dump`. If circular FKs block the restore, treat that as a schema bug to fix in 04 (deferrable constraints), not something to bypass by disabling triggers. **Logins (decided Oct 7):** after the `app` data is in, run `admin restore-auth-users --dry-run --file auth-users.csv`, then without `--dry-run` (04 10.2; against the local `admin` service for a drill, or a `famweather-admin` one-off for a disaster, with `SUPABASE_URL` and the service key of the target). It recreates each missing Supabase login with its original id and email through the Admin API, so `app.users` ids line up; nothing is restored into `auth.*` directly. Passwords and sessions are not part of the backup; users sign in with the configured login method.
+5. Restore data only, as `app_migrator` (so ownership stays correct), skipping the migrations table: `pg_restore -l app.dump | grep -v _sqlx_migrations > list.txt` then `pg_restore --data-only --single-transaction --use-list list.txt --dbname "$TARGET_URL_AS_APP_MIGRATOR" app.dump`. If circular FKs block the restore, treat that as a schema bug to fix in 04 (deferrable constraints), not something to bypass by disabling triggers. **Logins (decided Oct 7):** after the `app` data is in, run `admin restore-auth-users --dry-run --file auth-users.csv`, then without `--dry-run` (04 10.2; against the local `admin` service for a drill, or a `integrated-awn-weather-admin` one-off for a disaster, with `SUPABASE_URL` and the service key of the target). It recreates each missing Supabase login with its original id and email through the Admin API, so `app.users` ids line up; nothing is restored into `auth.*` directly. Passwords and sessions are not part of the backup; users sign in with the configured login method.
 6. Verify: row counts for `observations` and `daily_rollups` against production (SQL editor); `max(ts_utc)` of observations within 36 h of the dump; `ops/db/checks/exposure.sh` as `app_ci_check`; `admin invite --email drill@example.invalid --display-name drill --follow-all` against the target, then redeem the printed set-password link, sign in as that user and load a chart for a followed station (restored logins have no password, so also confirm `admin reset-link` works for one restored user); also check that `auth-users.csv` has as many rows as the production dashboard shows users and that `restore-auth-users` reported every `app.users` row restored; if `api` or `web` are not yet deployable, rely on the SQL checks above. Record date, backup timestamp, duration and issues in `docs/ops-log.md` (create on first drill).
 7. Disaster only: point Fly secrets, GitHub secrets and Netlify at the new project, redeploy, backfill gaps from AWN.
 8. Cadence: quarterly (calendar reminder). A failed drill is a P1 issue.
@@ -1174,7 +1174,7 @@ Target: the **drill** restores into a local Compose database **on Rodney's lapto
 ## 16. Implementation tasks (ordered)
 
 1. [ ] Create `ops/fly/api.toml`, `ops/fly/poller.toml`, `ops/backup/fly.toml`, root `.dockerignore` (4.2, 4.3, 6). *Status: files written and structure checked (`api.toml` `min_machines_running = 0`, `poller.toml` no http_service/services/auto_stop, backup toml no processes/restart; the `.dockerignore` context holds exactly the three backup inputs). Not verifiable without a Fly token: `flyctl config validate` and `flyctl deploy --build-only` both stop at "no access token available" (flyctl v0.5.1), so config validation and the `--dockerfile` path resolution are covered by the first deploy job (`config validate --strict`, then the deploy itself); if `--dockerfile backend/Dockerfile` fails to resolve there, switch to `--dockerfile Dockerfile` (4.7). Tick this box after that.* **Done when** `flyctl config validate --config <file>` passes where it needs no token (otherwise in the deploy job), api.toml has `min_machines_running = 0`, poller.toml has no `[http_service]`, `[[services]]` or `auto_stop_machines`, backup toml has no `[processes]`/`[[restart]]`, and `flyctl deploy backend --config ops/fly/api.toml --dockerfile backend/Dockerfile --build-only` resolves the Dockerfile path (adjust 4.7 if not).
-2. [ ] Create `ops/fly/run-oneoff.sh` (section 5). *Status: written; shellcheck clean; no-args and 3-args print usage and exit 2; a non-`/usr/local/bin` command and `invite`/`reset-link` in batch mode exit 2. Remaining, Rodney only (needs a Fly account): the dry run below.* **Done when** `shellcheck` is clean, running without enough arguments prints usage and exits 2, and a non-`/usr/local/bin` command in `batch` mode is rejected, and a **dry run** against the poller image (`ops/fly/run-oneoff.sh batch famweather-poller famweather-poller poller -- /usr/local/bin/admin --version`, which exits 0 and touches no database) proves `fly machine wait` returns only after the command has finished, the logs are printed, the exit code is propagated, and the machine is destroyed.
+2. [ ] Create `ops/fly/run-oneoff.sh` (section 5). *Status: written; shellcheck clean; no-args and 3-args print usage and exit 2; a non-`/usr/local/bin` command and `invite`/`reset-link` in batch mode exit 2. Remaining, Rodney only (needs a Fly account): the dry run below.* **Done when** `shellcheck` is clean, running without enough arguments prints usage and exits 2, and a non-`/usr/local/bin` command in `batch` mode is rejected, and a **dry run** against the poller image (`ops/fly/run-oneoff.sh batch integrated-awn-weather-poller integrated-awn-weather-poller poller -- /usr/local/bin/admin --version`, which exits 0 and touches no database) proves `fly machine wait` returns only after the command has finished, the logs are printed, the exit code is propagated, and the machine is destroyed.
 3. [x] Create `ops/backup/{Dockerfile,backup.sh,test.sh}`. **Done when** `ops/backup/test.sh` passes locally (9.7). *Done; the S3 stand-in is `adobe/s3mock`, because MinIO's public images are no longer published (the conditional-write check stays a real-S3 item, section 13 check 15).*
 4. [x] Create `ops/ci/smoke.sh`, `ops/ci/check-deployed-csp.mjs` (section 13) and `ops/ci/check-demo-values.sh` (below). **Done when** smoke passes against the Compose stack with `SMOKE_LOCAL=1 SITE_URL=http://localhost:8000` and the CSP script fails on a copy of `200.html` with an extra inline script.
 5. [x] Confirm `web/netlify.toml` is the output of `node web/scripts/headers.mjs generate` (`headers.mjs check` exits 0). **Done when** its redirects equal 8.2 apart from the `<project-ref>` fill and the commented `signed` line.
@@ -1200,12 +1200,12 @@ Target: the **drill** restores into a local Compose database **on Rodney's lapto
 ## 18. Open questions and assumptions
 
 1. (Closed) Architecture: four Fly apps, accepted (proposals/02).
-2. Supabase and Fly region (assumed `us-west-1` and `sjc`; AWS `us-west-2`). Confirm after choosing the Supabase region; measure RTT.
+2. (Closed, Nov 1) Region: Supabase specific region `us-west-1`, Fly `sjc` (section 4.1). Backups stay in AWS `us-west-2`, a different region from the database on purpose. Still measure RTT after deploy.
 3. (Closed, Oct 7) S3 retention: versioning plus 90 days current, 7-day noncurrent grace, no Object Lock (9.5). Escrow (decided Oct 7): one age key, private key in Rodney's password manager plus a printed copy in a safe; a second escrow recipient is optional.
 4. (Closed, Oct 7) Fly API auto-stop is allowed; no external uptime probe (4.2, 10).
 5. (Closed, Oct 7) **No SMTP provider for now** (proposals/05, option b2): login is email + password with hand-delivered set-password links. Growth path (documented, not built): custom SMTP (Amazon SES acceptable) plus emailed links; see section 7 step 5 and 04 section 8.1a. Open until the project is created: whether the two password-change switches can be turned off on the free plan (section 7 step 5; fallback proposal 05 option b1).
 6. (Closed, Oct 7) Auth user capture: `app_auth.backup_users()` feeds an encrypted `auth-users` CSV in every backup (`BACKUP_INCLUDE_AUTH` defaults to 1); `admin restore-auth-users` restores through the Admin API (no direct `auth.*` restore). Still to verify at the first drill: GoTrue accepts an explicit `id` on admin create-user (04 10.2).
-7. (Closed) `famweather-admin` holds no `AWN_APPLICATION_KEY`, matching the updated conventions; `admin add-station` takes the user's key from the prompt and does not need it.
+7. (Closed) `integrated-awn-weather-admin` holds no `AWN_APPLICATION_KEY`, matching the updated conventions; `admin add-station` takes the user's key from the prompt and does not need it.
 8. (Closed, Oct 7) Restore drill target: Rodney's laptop is allowed for now, as an explicit accepted exception to S12, with the data deleted after each drill (15.6 steps 9). Revisit if more people ever hold production data.
 9. Optional guard against re-enabled branch deploys: a failing `[context.branch-deploy]` build command in `netlify.toml` (01 owns the file).
 10. Unverified Fly behaviours: `fly ssh console --pty -C` on a distroless image with `admin wait` (dry run, section 5); optional build-once `--image` deploys across apps with app-scoped tokens (proposal 02 fact 6; per-app builds are the default); `fly machine update --image` keeping `--schedule`; `--dockerfile` path resolution (4.7).

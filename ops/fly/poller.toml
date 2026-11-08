@@ -1,4 +1,4 @@
-app = "famweather-poller"
+app = "integrated-awn-weather-poller"
 primary_region = "sjc"
 kill_signal = "SIGTERM"
 kill_timeout = "30s"

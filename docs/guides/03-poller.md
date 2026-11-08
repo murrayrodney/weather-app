@@ -30,7 +30,7 @@ Does not own: schema, grants, `core::crypto` and `core::testdb` (04), Fly apps/s
 | F4 | Reference data from the airport GHCN-Daily station via ACIS. |
 | F5 | Rollup days are local standard time. |
 | F6 | Rain counter differences, resets to near zero, reconciliation. |
-| D6 | Poller off and replaying by default locally; backfill local first, then once in production via `poller run-job awn_backfill` on `famweather-poller`. |
+| D6 | Poller off and replaying by default locally; backfill local first, then once in production via `poller run-job awn_backfill` on `integrated-awn-weather-poller`. |
 | C3 | Session advisory locks need a session-level connection: the poller (and one-off machines) use the **direct** connection only, never a pooler (conventions). |
 
 ## 3. Cross-component contracts
@@ -301,7 +301,7 @@ impl KeyRing {
 
 The poller holds no `CREDENTIALS_PUBLIC_KEY` (that lives on the api and admin apps); for re-encryption it derives the public key from its own private key with `public_key_from_private` (proposals/01).
 
-`poller run-job credential_reencrypt` (on demand; rotation step 4 in 04 section 9.5; production: one-off on `famweather-poller`). For **every** row with `key_version < CREDENTIALS_KEY_VERSION` (04 section 9.5), including `replaced` rows, one transaction each: decrypt with the row's version, encrypt to `public_key_from_private(current key)` (same `credential_id`/`owner_id` AAD, fresh encapsulation, `key_version = CREDENTIALS_KEY_VERSION`), then the compare-and-swap exactly as in 04 section 9.5:
+`poller run-job credential_reencrypt` (on demand; rotation step 4 in 04 section 9.5; production: one-off on `integrated-awn-weather-poller`). For **every** row with `key_version < CREDENTIALS_KEY_VERSION` (04 section 9.5), including `replaced` rows, one transaction each: decrypt with the row's version, encrypt to `public_key_from_private(current key)` (same `credential_id`/`owner_id` AAD, fresh encapsulation, `key_version = CREDENTIALS_KEY_VERSION`), then the compare-and-swap exactly as in 04 section 9.5:
 
 ```sql
 UPDATE app.credentials SET api_key_ciphertext=$new_ct, encapsulated_key=$new_ek, key_version=$new_v
@@ -375,7 +375,7 @@ Per station (sequential):
 4. `detail`: `{pages, rows_seen, rows_inserted, rows_updated, earliest_ts, stopped_because}` (answers history depth, F3).
 5. After all stations: enqueue every standard date from each station's earliest written row to today into `rollup_dirty_days`, then run `run_job_wait(DailyRollup, wait = 15 min)`: poll `try_job_lock` every 5 s for up to 15 minutes; if still held, give up with a `warn` (the queue persists, so the scheduled rollup does the same work).
 
-Idempotent, resumable, about 1 page per second per key. Local: replay. Production: once, `poller run-job awn_backfill` on `famweather-poller`; it shares the gate table with the running poller so budgets are shared automatically, and it does not hold `job:awn_ingest`.
+Idempotent, resumable, about 1 page per second per key. Local: replay. Production: once, `poller run-job awn_backfill` on `integrated-awn-weather-poller`; it shares the gate table with the running poller so budgets are shared automatically, and it does not hold `job:awn_ingest`.
 
 ### 7.3 `daily_rollup` (hourly, and after backfill)
 
@@ -524,7 +524,7 @@ Order matters: station history cannot be rebuilt (AWN keeps only a limited histo
 - [ ] **T8 `awn_ingest`.** Mapping with coercion, dedupe, upsert, dirty-day enqueue, empty-station behaviour, gap warning. Done when replay integration and idempotency tests pass.
 - [ ] **T9 (removed).** No forecast job (proposals/06). The number is kept so T10 to T16 references stay valid.
 - [ ] **T10 Replay integration suite.** Compose end to end (12.2) for ingest. Done when `make test-backend` passes and Compose with `AWN_MODE=replay POLLER_ENABLED=true` shows `success` rows in `job_runs` plus observation rows.
-- [ ] **T11 Production go-live gate.** Agents prepare a checklist for Rodney (agents never deploy): migrations applied, stations and credentials added via `admin`, Fly secrets set including **only** `HEALTHCHECK_URL_AWN_INGEST` (the `BACKUP` and `DBSIZE` pings belong to other apps), `famweather-poller` deployed with only the implemented jobs registered. Done when Rodney confirms production `success` runs for `awn_ingest` and the first pings arrived. Do not start T12 to T16 before this unless T11 is blocked.
+- [ ] **T11 Production go-live gate.** Agents prepare a checklist for Rodney (agents never deploy): migrations applied, stations and credentials added via `admin`, Fly secrets set including **only** `HEALTHCHECK_URL_AWN_INGEST` (the `BACKUP` and `DBSIZE` pings belong to other apps), `integrated-awn-weather-poller` deployed with only the implemented jobs registered. Done when Rodney confirms production `success` runs for `awn_ingest` and the first pings arrived. Do not start T12 to T16 before this unless T11 is blocked.
 - [ ] **T12 `awn_backfill`.** Done when the backfill replay tests pass.
 - [ ] **T13 `daily_rollup`.** `core::rain`, `core::time`, queue consumption, month expansion, coverage; reconciliation stays `unchecked`. Done when unit and rollup integration tests pass.
 - [ ] **T14 `reference_sync`.** ACIS client (`station_data` and `nearby_stations`, 7.5a), parser, hourly pickup of `last_synced_date IS NULL`, `USW00099001..3` and `stnmeta__*` fixtures. Done when parser unit and replay tests pass; then add `HEALTHCHECK_URL_REFERENCE_SYNC`/`_DAILY_ROLLUP` in production.

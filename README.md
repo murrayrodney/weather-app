@@ -16,10 +16,10 @@ This is a personal, non-commercial project. Forecast data is by [Open-Meteo.com]
 | Piece | What it is | Where it runs |
 | --- | --- | --- |
 | Web | SvelteKit static single-page app (`web/`) | Netlify |
-| API | Rust (Axum). Checks the login token, applies the follow rules, serves charts and forecasts | Fly.io app `famweather-api` |
-| Poller | Rust. Polls each station every 5 minutes, syncs airport records, computes daily rollups. The only piece that can decrypt stored station keys | Fly.io app `famweather-poller` |
-| Admin | Rust CLI (`admin`): invites, reset links, adding stations, migrations. No machines at rest | Fly.io app `famweather-admin` |
-| Backup | Daily encrypted database dump to S3 | Fly.io app `famweather-backup` (not built yet) |
+| API | Rust (Axum). Checks the login token, applies the follow rules, serves charts and forecasts | Fly.io app `integrated-awn-weather-api` |
+| Poller | Rust. Polls each station every 5 minutes, syncs airport records, computes daily rollups. The only piece that can decrypt stored station keys | Fly.io app `integrated-awn-weather-poller` |
+| Admin | Rust CLI (`admin`): invites, reset links, adding stations, migrations. No machines at rest | Fly.io app `integrated-awn-weather-admin` |
+| Backup | Daily encrypted database dump to S3 | Fly.io app `integrated-awn-weather-backup` (not built yet) |
 | Database and login | Postgres plus Supabase Auth (email + password, no sign-up) | Supabase |
 
 The API, poller and admin are one Docker image (`backend/Dockerfile`) deployed as separate Fly apps, so the poller's decryption key never sits next to the API.
@@ -230,10 +230,10 @@ Checklist:
 1. **Pre-build checks.** Both passed on Oct 7, 2026 (see [`docs/Pre-build Checks.md`](docs/Pre-build%20Checks.md)).
 2. **Accounts with two-factor on.** GitHub, Fly.io, Netlify, Supabase, AWS (backups only), healthchecks.io, plus password-manager entries.
 3. **Netlify site.** Create it before Supabase, because Supabase needs its URL. Base directory `web`, production branch `production` (create the branch from `main` first if needed; its first build fails or is empty, which is expected), branch deploys off, deploy previews on for pull requests. Turn off post-processing and snippet injection (they break the strict content security policy). Do not deploy yet. Note the site URL. Later you add the variables `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY` (the publishable key).
-4. **Supabase project.** Free plan. Set Site URL to the Netlify production URL. Turn sign-ups and anonymous sign-ins off, leave email on (this enables password sign-in), leave SMTP unconfigured, set the redirect allow-list empty, set the email OTP lifetime to 3600 seconds, set minimum password length 12, and turn off both "reauthentication on password change" and "require current password". If either of those two switches cannot be turned off, stop and tell the coding agent (there is a fallback design). Switch to asymmetric signing keys, disable the Data API, enforce SSL, and download the CA certificate and commit it as `backend/certs/supabase-ca.crt`. Then create the database roles with `ops/db/bootstrap/roles.sql` and run `ops/db/bootstrap/auth_access.sql` (the `app_auth` functions that let the app check sessions) from a trusted shell, never the dashboard SQL editor. Put the two Netlify variables from step 3 in place.
+4. **Supabase project.** Free plan, specific region West US (North California) `us-west-1`, next to Fly's `sjc`. Set Site URL to the Netlify production URL. Turn sign-ups and anonymous sign-ins off, leave email on (this enables password sign-in), leave SMTP unconfigured, set the redirect allow-list empty, set the email OTP lifetime to 3600 seconds, set minimum password length 12, and turn off both "Require reauthentication when changing password" and "Require current password when changing password". If either of those two switches cannot be turned off, stop and tell the coding agent (there is a fallback design). Switch to asymmetric signing keys, disable the Data API, enforce SSL, and download the CA certificate and commit it as `backend/certs/supabase-ca.crt`. Then create the database roles with `ops/db/bootstrap/roles.sql` and run `ops/db/bootstrap/auth_access.sql` (the `app_auth` functions that let the app check sessions) from a trusted shell, never the dashboard SQL editor. Put the two Netlify variables from step 3 in place.
 5. **AWS S3 bucket and age key for backups.** Upload-only IAM user, versioning, 90-day expiry; an offline `age` key pair for encrypting dumps.
 6. **healthchecks.io checks** for ingest, backup and database size.
-7. **Fly apps.** Create `famweather-api`, `famweather-poller`, `famweather-admin`, `famweather-backup`. Set secrets from a private file you delete afterwards, after checking it with `ops/ci/check-demo-values.sh`. Roughly, by app:
+7. **Fly apps.** Create `integrated-awn-weather-api`, `integrated-awn-weather-poller`, `integrated-awn-weather-admin`, `integrated-awn-weather-backup`. Set secrets from a private file you delete afterwards, after checking it with `ops/ci/check-demo-values.sh`. Roughly, by app:
    - poller: its database login, the AWN application key, the **private** credential key, healthcheck URLs.
    - api (set later, at step 13): its database login, the AWN application key, the **public** credential key.
    - admin: the migrator database login, Supabase URL and secret key, the public credential key.

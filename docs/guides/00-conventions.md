@@ -65,14 +65,14 @@ Source of decisions: `docs/Family Weather App Design Doc.md` and `docs/Design Re
 
 ## Fly layout (proposals/02, accepted)
 
-Fly secrets are app-wide, so secret isolation (S5) needs separate apps. Four Fly apps are built from the same `backend` image (each app does its own `--remote-only` build by default; per-app deploy tokens `FLY_API_TOKEN_API`, `FLY_API_TOKEN_POLLER`, `FLY_API_TOKEN_BACKUP` exist only for the apps CI deploys; `famweather-admin` has none):
+Fly secrets are app-wide, so secret isolation (S5) needs separate apps. Four Fly apps are built from the same `backend` image (each app does its own `--remote-only` build by default; per-app deploy tokens `FLY_API_TOKEN_API`, `FLY_API_TOKEN_POLLER`, `FLY_API_TOKEN_BACKUP` exist only for the apps CI deploys; `integrated-awn-weather-admin` has none):
 
 | App | Machines | Secrets |
 | --- | --- | --- |
-| `famweather-api` | 1 (`api`), auto-stop allowed (decided Oct 7: the machine sleeps when idle, about 1 s cold start; the in-memory forecast cache is simply empty after a wake) | `app_api` DATABASE_URL, JWKS/issuer, `AWN_APPLICATION_KEY`, `CREDENTIALS_PUBLIC_KEY`, `CREDENTIALS_KEY_VERSION`, `NETLIFY_PROXY_SECRET` (the issuer and JWKS URL are non-secret `[env]` in `ops/fly/api.toml`); outbound HTTPS to AWN, ACIS and the three Open-Meteo hosts (no key) |
-| `famweather-poller` | 1 (`poller`), always on, `--ha=false` | `app_poller` DATABASE_URL, `AWN_APPLICATION_KEY`, `CREDENTIALS_PRIVATE_KEY`, `CREDENTIALS_KEY_VERSION`, healthcheck URLs |
-| `famweather-admin` | 0 at rest; one-off machines only | `app_migrator` DATABASE_URL, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `CREDENTIALS_PUBLIC_KEY`, `CREDENTIALS_KEY_VERSION` (non-secret `SITE_URL`, the origin printed in set-password links, is passed by `run-oneoff.sh` with `-e` from the committed `ops/fly/site-url.txt`; the admin app has no config file) |
-| `famweather-backup` | scheduled daily | `app_backup` URL, S3 upload-only creds, age recipient |
+| `integrated-awn-weather-api` | 1 (`api`), auto-stop allowed (decided Oct 7: the machine sleeps when idle, about 1 s cold start; the in-memory forecast cache is simply empty after a wake) | `app_api` DATABASE_URL, JWKS/issuer, `AWN_APPLICATION_KEY`, `CREDENTIALS_PUBLIC_KEY`, `CREDENTIALS_KEY_VERSION`, `NETLIFY_PROXY_SECRET` (the issuer and JWKS URL are non-secret `[env]` in `ops/fly/api.toml`); outbound HTTPS to AWN, ACIS and the three Open-Meteo hosts (no key) |
+| `integrated-awn-weather-poller` | 1 (`poller`), always on, `--ha=false` | `app_poller` DATABASE_URL, `AWN_APPLICATION_KEY`, `CREDENTIALS_PRIVATE_KEY`, `CREDENTIALS_KEY_VERSION`, healthcheck URLs |
+| `integrated-awn-weather-admin` | 0 at rest; one-off machines only | `app_migrator` DATABASE_URL, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `CREDENTIALS_PUBLIC_KEY`, `CREDENTIALS_KEY_VERSION` (non-secret `SITE_URL`, the origin printed in set-password links, is passed by `run-oneoff.sh` with `-e` from the committed `ops/fly/site-url.txt`; the admin app has no config file) |
+| `integrated-awn-weather-backup` | scheduled daily | `app_backup` URL, S3 upload-only creds, age recipient |
 
 One-off `awn_backfill` runs use the poller app (it needs the poller's secrets). Migrations run from CI in a protected environment, not as a Fly release command. Process names `api` and `poller` are kept so the layout could collapse later. `ops/fly/run-oneoff.sh` validates its app arguments (a wrong app would run a command with the wrong secrets); one-off machines inherit their app's secrets.
 
@@ -145,7 +145,7 @@ The browser always talks to one origin (`http://localhost:8000` locally; the Net
 - HPKE (RFC 9180), base mode, X25519 + HKDF-SHA256 + AES-256-GCM (Rust crate `hpke`, exact version pinned; RFC 9180 known-answer test vectors in tests; a unit test that moving a ciphertext to another row (different `credential_id` or `owner_id`) fails to decrypt).
 - `info` = `b"family-weather/credential/v1"`. AAD = 16 raw bytes of `credential_id` followed by 16 raw bytes of `owner_id`.
 - Keys are base64 of the raw 32-byte X25519 keys.
-- `api` and `admin` hold `CREDENTIALS_PUBLIC_KEY` (encrypt only). `poller` holds `CREDENTIALS_PRIVATE_KEY` (the only Fly app that does; the poller decrypts once into memory with `secrecy` and never logs keys). The API sees a pasted key in plain text only while testing it against AWN in the connect flow. The public key is not secret; the private key is a Fly secret on `famweather-poller` only, and the committed dev key pair is local only and refused in production. The decrypt code is behind the `core` cargo feature `decrypt`, enabled only by `poller` (and tests); CI fails if `api` enables it.
+- `api` and `admin` hold `CREDENTIALS_PUBLIC_KEY` (encrypt only). `poller` holds `CREDENTIALS_PRIVATE_KEY` (the only Fly app that does; the poller decrypts once into memory with `secrecy` and never logs keys). The API sees a pasted key in plain text only while testing it against AWN in the connect flow. The public key is not secret; the private key is a Fly secret on `integrated-awn-weather-poller` only, and the committed dev key pair is local only and refused in production. The decrypt code is behind the `core` cargo feature `decrypt`, enabled only by `poller` (and tests); CI fails if `api` enables it.
 - Columns: `api_key_ciphertext bytea`, `encapsulated_key bytea`, `key_version smallint`.
 - Rotation: `admin keygen` → set new key as current, old as `*_PREVIOUS` on the poller → on-demand job `credential_reencrypt` rewrites rows → remove previous key.
 

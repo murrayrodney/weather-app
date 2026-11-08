@@ -7,8 +7,8 @@ usage() { sed -n '2,3p' "$0" >&2; exit 2; }
 mode=$1; app=$2; src=$3; grp=$4; shift 4
 # a wrong app would run a command with the wrong secrets: only these (app, image source app, group) triples are allowed
 case "$app $src $grp" in
-  "famweather-poller famweather-poller poller"|"famweather-admin famweather-poller poller") ;;
-  *) echo "unsupported app/source/group: $app $src $grp (allowed: 'famweather-poller famweather-poller poller', 'famweather-admin famweather-poller poller')" >&2; exit 2 ;;
+  "integrated-awn-weather-poller integrated-awn-weather-poller poller"|"integrated-awn-weather-admin integrated-awn-weather-poller poller") ;;
+  *) echo "unsupported app/source/group: $app $src $grp (allowed: 'integrated-awn-weather-poller integrated-awn-weather-poller poller', 'integrated-awn-weather-admin integrated-awn-weather-poller poller')" >&2; exit 2 ;;
 esac
 case "$mode" in
   batch) [ "${1:-}" = "--" ] || usage; shift
@@ -30,8 +30,8 @@ envargs=()
 while IFS= read -r kv; do envargs+=(-e "$kv"); done < <(jq -r '.config.env // {} | to_entries[] | "\(.key)=\(.value)"' <<<"$cfg")  # mirrors POLLER_ENABLED, RUST_LOG, AWN_MODE, APP_ENV
 name="oneoff-$(date -u +%Y%m%d-%H%M%S)"
 common=(-a "$app" --name "$name" --region "$region" --vm-size shared-cpu-1x --vm-memory 256 --restart no ${envargs[@]+"${envargs[@]}"} -e APP_ENV=production)
-if [ "$app" = famweather-admin ]; then
-  # famweather-admin has no config file, so the non-secret SITE_URL (origin printed in set-password links) comes from a committed constant
+if [ "$app" = integrated-awn-weather-admin ]; then
+  # integrated-awn-weather-admin has no config file, so the non-secret SITE_URL (origin printed in set-password links) comes from a committed constant
   site_url_file="$(dirname "$0")/site-url.txt"
   [ -f "$site_url_file" ] || { echo "ops/fly/site-url.txt is missing: create it with one line, the production site origin (for example https://<your-site>.netlify.app). See docs/guides/06-deploy-ops.md section 3.3 (admin row)." >&2; exit 2; }
   site_url="$(tr -d '[:space:]' < "$site_url_file")"

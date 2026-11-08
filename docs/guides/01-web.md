@@ -567,7 +567,7 @@ Netlify does not apply `[[headers]]` to proxied content, so API responses carry 
 
 ### 4.9 `web/netlify.toml` and Caddy
 
-`web/netlify.toml` (placeholders written literally: Fly app `famweather-api`, Node `26`; only `<project-ref>` remains, in `security-headers.json` and therefore in the generated CSP):
+`web/netlify.toml` (placeholders written literally: Fly app `integrated-awn-weather-api`, Node `26`; only `<project-ref>` remains, in `security-headers.json` and therefore in the generated CSP):
 
 ```toml
 [build]
@@ -585,7 +585,7 @@ Netlify does not apply `[[headers]]` to proxied content, so API responses carry 
 # uncomment the next line and set NETLIFY_PROXY_SECRET in Netlify (runtime scope) and on the API.
 [[redirects]]
   from = "/api/*"
-  to = "https://famweather-api.fly.dev/api/:splat"
+  to = "https://integrated-awn-weather-api.fly.dev/api/:splat"
   status = 200
   force = true
   # signed = "NETLIFY_PROXY_SECRET"
