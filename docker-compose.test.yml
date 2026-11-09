@@ -68,6 +68,10 @@ services:
         EXCL=""; [ -d crates/admin ] && EXCL="--exclude admin"
         # the host-side secret-log check (ops/local/check-secret-logs.sh, another uid on Linux CI) deletes .local/canary-tokens afterwards
         mkdir -p /work/.local && chmod 777 /work/.local
+        # CI bind-mounts the cargo registry/target from .ci-cache; cargo (running as root here) creates files such as
+        # target/debug/incremental/*/*.lock that the runner user cannot read, so actions/cache's tar failed with
+        # "Permission denied" (exit 2) and nothing was saved. Make them readable on exit (harmless for named volumes).
+        trap 'chmod -R a+rX /cargo-target /usr/local/cargo/registry' EXIT
         cargo test --workspace $$EXCL $$FEAT
         if [ -d crates/api ] && cargo tree -p api -e normal,build,features -f '{p} {f}' | grep -E 'decrypt|test-support|testdb'; then echo "api enables a forbidden core feature"; exit 1; fi
         if [ -d crates/admin ]; then cargo test -p admin --features compose-tests -- --test-threads=1; fi
